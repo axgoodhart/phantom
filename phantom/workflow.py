@@ -515,14 +515,30 @@ def setup_windows():
         safe_app = app.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"')
         safe_title = title.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"')
 
-        # Activate the app first
+        # Activate the app and unminimize any docked windows first
         _, activated = run_applescript(f'tell application "{{safe_app}}" to activate')
         if not activated:
             print(f"    Could not activate {{app}}")
             fail_count += 1
             continue
 
-        time.sleep(0.3)
+        # Unminimize all minimized windows for this app so they become
+        # visible to System Events and can be repositioned.
+        unminimize_script = f\'\'\'
+tell application "System Events"
+    tell process "{{safe_app}}"
+        try
+            repeat with w in windows
+                if value of attribute "AXMinimized" of w is true then
+                    set value of attribute "AXMinimized" of w to false
+                end if
+            end repeat
+        end try
+    end tell
+end tell
+\'\'\'
+        run_applescript(unminimize_script)
+        time.sleep(0.5)
 
         # Try matching by window title first, fall back to window 1
         script = f\'\'\'

@@ -24,6 +24,7 @@ logging.basicConfig(
 from .recorder import EventRecorder
 from .environment import capture_environment, get_frontmost_app
 from .workflow import generate_workflow, parse_workflow_metadata
+from .watchdog import PlaybackWatchdog
 
 
 class Api:
@@ -60,6 +61,9 @@ class Api:
         self._loop_ping_url = None  # URL to check between runs
         self._loop_iteration = 0    # Current iteration (1-based)
         self._loop_cmd = None       # Command to re-launch
+
+        # Playback watchdog (abort hotkey + sleep detection)
+        self._watchdog = PlaybackWatchdog(abort_callback=self._watchdog_abort)
 
     def set_window(self, window):
         self._window = window
@@ -669,9 +673,19 @@ class Api:
 
     # --- Playback ---
 
+    def _watchdog_abort(self):
+        """Called by the watchdog when abort is triggered."""
+        self.stop_workflow()
+        if self._window:
+            try:
+                self._window.evaluate_js("showToast('Playback aborted')")
+                self._window.evaluate_js('onPlaybackComplete()')
+            except Exception:
+                pass
+
     def run_workflow(self, speed=1.0, match_resolution=True, match_windows=True,
                      play_completion_sound=False, loop_count=1, loop_delay=0,
-                     loop_ping_url=None):
+                     loop_ping_url=None, abort_hotkey_enabled=True):
         """Launch the loaded workflow as a subprocess, optionally looping."""
         if self._playback_active or not self._playback_filepath:
             return {'status': 'unavailable'}
@@ -774,6 +788,7 @@ class Api:
 
             self._playback_process = proc
             self._playback_active = True
+            self._watchdog.start(hotkey_enabled=abort_hotkey_enabled)
             self._playback_thread = threading.Thread(
                 target=self._monitor_playback,
                 daemon=True,
@@ -794,6 +809,7 @@ class Api:
 
         self._playback_play_sound = False
         self._playback_active = False  # Signal loop to stop
+        self._watchdog.stop()
 
         proc = self._playback_process
         try:
@@ -934,6 +950,7 @@ class Api:
         # All done
         self._playback_active = False
         self._playback_process = None
+        self._watchdog.stop()
         self._cleanup_playback_temp_file()
         play_sound = self._playback_play_sound
         self._playback_play_sound = False
@@ -975,6 +992,60 @@ class Api:
         except Exception:
             pass
         self._playback_temp_filepath = None
+
+    # --- Panel Mini Mode ---
+
+    _panel_saved_x = None
+    _panel_saved_y = None
+    _panel_saved_w = None
+    _panel_saved_h = None
+
+    def get_panel_geometry(self):
+        """Return the current panel window position and size."""
+        if not self._window:
+            return None
+        return {
+            'x': self._window.x,
+            'y': self._window.y,
+            'w': self._window.width,
+            'h': self._window.height,
+        }
+
+    def set_panel_mini(self, mini):
+        """Collapse or restore the panel window."""
+        if not self._window:
+            return
+
+        if mini:
+            # Save current geometry
+            self._panel_saved_x = self._window.x
+            self._panel_saved_y = self._window.y
+            self._panel_saved_w = self._window.width
+            self._panel_saved_h = self._window.height
+
+            # Get screen size for bottom-left positioning
+            screen_width, screen_height = 1920, 1080
+            try:
+                from Quartz import CGDisplayBounds, CGMainDisplayID
+                bounds = CGDisplayBounds(CGMainDisplayID())
+                screen_width = int(bounds.size.width)
+                screen_height = int(bounds.size.height)
+            except ImportError:
+                pass
+
+            mini_w = 200
+            mini_h = 48
+            mini_x = 24
+            mini_y = screen_height - mini_h - 24
+
+            self._window.resize(mini_w, mini_h)
+            self._window.move(mini_x, mini_y)
+        else:
+            # Restore saved geometry
+            if self._panel_saved_w and self._panel_saved_h:
+                self._window.resize(self._panel_saved_w, self._panel_saved_h)
+            if self._panel_saved_x is not None:
+                self._window.move(self._panel_saved_x, self._panel_saved_y)
 
     # --- Grid ---
 

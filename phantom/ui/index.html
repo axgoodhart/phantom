@@ -919,6 +919,89 @@
         color: #333;
       }
 
+      /* ---- Mini Playback Indicator ---- */
+      .mini-playback {
+        display: none;
+        position: fixed;
+        inset: 0;
+        flex-direction: column;
+        justify-content: center;
+        padding: 8px 12px;
+        background: black;
+        border: 1px solid var(--accent-muted);
+        border-radius: 8px;
+      }
+
+      body.mini-mode .mini-playback {
+        display: flex;
+      }
+
+      body.mini-mode .top-bar,
+      body.mini-mode .record-panel,
+      body.mini-mode .playback-panel,
+      body.mini-mode .footer {
+        display: none !important;
+      }
+
+      body.mini-mode {
+        opacity: 0.7;
+        border: 2px solid var(--accent-muted);
+      }
+
+      body.mini-mode:hover {
+        opacity: 1;
+      }
+
+      .mini-progress {
+        height: 3px;
+        background: #222;
+        border-radius: 2px;
+        overflow: hidden;
+        margin-bottom: 6px;
+      }
+
+      .mini-progress-fill {
+        height: 100%;
+        background: var(--accent);
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.15s linear;
+      }
+
+      .mini-status {
+        font-size: 9px;
+        color: #999;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+
+      .mini-status-text {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mini-abort-btn {
+        font-family: inherit;
+        font-size: 9px;
+        padding: 2px 8px;
+        border-radius: 3px;
+        border: 1px solid #ff3344;
+        background: none;
+        color: #ff3344;
+        cursor: pointer;
+        flex-shrink: 0;
+        text-transform: uppercase;
+      }
+
+      .mini-abort-btn:hover {
+        background: #ff3344;
+        color: #fff;
+      }
+
       .toast {
         position: fixed;
         bottom: 20px;
@@ -1194,6 +1277,10 @@
           <input type="checkbox" id="optCompletionSound" />
           <span>Play sound on completion</span>
         </label>
+        <label class="modal-row">
+          <input type="checkbox" id="optAbortHotkey" checked />
+          <span>Abort hotkey (⌃⌥⌘P)</span>
+        </label>
         <div class="loop-controls">
           <div class="loop-row">
             <span class="loop-label">Loop</span>
@@ -1262,6 +1349,16 @@
 
     <div class="footer">Phantom v1.0</div>
 
+    <div class="mini-playback" id="miniPlayback">
+      <div class="mini-progress">
+        <div class="mini-progress-fill" id="miniProgressFill"></div>
+      </div>
+      <div class="mini-status">
+        <span class="mini-status-text" id="miniStatusText">Playing...</span>
+        <button class="mini-abort-btn" id="miniAbortBtn">Stop</button>
+      </div>
+    </div>
+
     <div class="toast" id="toast"></div>
 
     <script>
@@ -1329,6 +1426,7 @@
       const optSpeed = document.getElementById('optSpeed')
       const optSpeedValue = document.getElementById('optSpeedValue')
       const optCompletionSound = document.getElementById('optCompletionSound')
+      const optAbortHotkey = document.getElementById('optAbortHotkey')
       const btnStartPlayback = document.getElementById('btnStartPlayback')
       const btnCancelPlayback = document.getElementById('btnCancelPlayback')
       const playbackTimeoutNote = document.getElementById('playbackTimeoutNote')
@@ -1372,6 +1470,11 @@
       const btnLoadSelected = document.getElementById('btnLoadSelected')
       const btnCloseWorkflows = document.getElementById('btnCloseWorkflows')
 
+      const miniPlayback = document.getElementById('miniPlayback')
+      const miniProgressFill = document.getElementById('miniProgressFill')
+      const miniStatusText = document.getElementById('miniStatusText')
+      const miniAbortBtn = document.getElementById('miniAbortBtn')
+
       let selectedWorkflowFilename = null
 
       // ---- Wait for pywebview ----
@@ -1388,17 +1491,35 @@
       }
 
       // ---- API helpers ----
+      let _apiCallActive = false
+
       async function api(method, ...args) {
         if (!window.pywebview || !window.pywebview.api) {
           console.warn('API not ready')
           return null
         }
-        try {
-          return await window.pywebview.api[method](...args)
-        } catch (e) {
-          console.error(`API error (${method}):`, e)
-          return null
+
+        // Pause polling while a user-initiated call is in flight
+        const wasPaused = _apiCallActive
+        _apiCallActive = true
+
+        const maxAttempts = 3
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            const result = await window.pywebview.api[method](...args)
+            _apiCallActive = wasPaused
+            return result
+          } catch (e) {
+            console.warn(`API call ${method} attempt ${attempt}/${maxAttempts} failed:`, e)
+            if (attempt < maxAttempts) {
+              await new Promise(r => setTimeout(r, 80 * attempt))
+            }
+          }
         }
+
+        console.error(`API call ${method} failed after ${maxAttempts} attempts`)
+        _apiCallActive = wasPaused
+        return null
       }
 
       // ---- Toast ----
@@ -1621,7 +1742,10 @@
       // ---- Event Polling ----
       function startPolling() {
         if (pollInterval) clearInterval(pollInterval)
-        pollInterval = setInterval(pollEvents, 50)
+        pollInterval = setInterval(() => {
+          if (_apiCallActive) return  // Yield to user-initiated calls
+          pollEvents()
+        }, 80)
       }
 
       function stopPolling() {
@@ -1844,6 +1968,7 @@
         optMatchRes.checked = true
         optMatchWindows.checked = true
         optCompletionSound.checked = false
+        optAbortHotkey.checked = true
         optLoopCount.value = '1'
         optLoopCount.disabled = false
         optLoopInfinite.checked = false
@@ -1869,7 +1994,8 @@
       }
 
       async function startPlayback(speed, matchRes, matchWindows, playSound,
-                                    loopCount, loopDelay, loopPingUrl) {
+                                    loopCount, loopDelay, loopPingUrl,
+                                    abortHotkeyEnabled) {
         const result = await api(
           'run_workflow',
           speed,
@@ -1878,7 +2004,8 @@
           playSound,
           loopCount || 1,
           loopDelay || 0,
-          loopPingUrl || null
+          loopPingUrl || null,
+          abortHotkeyEnabled !== false
         )
         if (!result || result.status !== 'running') {
           if (result && result.message) showToast(result.message)
@@ -1900,6 +2027,8 @@
         playbackProgress.classList.add('active')
         playbackProgressFill.style.width = '0%'
         setStatus('previewing', 'Running workflow...')
+
+        enterMiniMode()
         return true
       }
 
@@ -1908,11 +2037,12 @@
         optMatchRes.checked = false
         optMatchWindows.checked = false
         optCompletionSound.checked = false
+        optAbortHotkey.checked = true
         optSpeed.value = '1'
         optSpeedValue.textContent = '1x'
         playbackSpeed.value = '1'
         playbackSpeedValue.textContent = '1x'
-        await startPlayback(1.0, false, false, false)
+        await startPlayback(1.0, false, false, false, 1, 0, null, true)
       }
 
       btnStartPlayback.addEventListener('click', async () => {
@@ -1932,7 +2062,8 @@
           optCompletionSound.checked,
           loopCount,
           loopDelay,
-          loopPingUrl
+          loopPingUrl,
+          optAbortHotkey.checked
         )
       })
 
@@ -1957,6 +2088,7 @@
       function updateLoopStatus(text) {
         loopStatus.textContent = text
         loopStatus.classList.add('active')
+        miniStatusText.textContent = text
       }
 
       btnOpenWorkflow.addEventListener('click', () => {
@@ -2021,6 +2153,9 @@
       function updatePlaybackProgress(pct, current, total) {
         playbackProgressFill.style.width = pct + '%'
         statusText.textContent = `Playback: ${current}/${total} (${pct}%)`
+        // Mirror to mini indicator
+        miniProgressFill.style.width = pct + '%'
+        miniStatusText.textContent = `${pct}% (${current}/${total})`
       }
 
       // Called from Python when workflow subprocess finishes
@@ -2042,6 +2177,8 @@
         loopStatus.classList.remove('active')
         loopStatus.textContent = ''
         setStatus('ready', 'Ready')
+
+        exitMiniMode()
       }
 
       // ---- Helpers ----
@@ -2066,6 +2203,29 @@
         div.textContent = str
         return div.innerHTML
       }
+
+      // ---- Mini Playback Mode ----
+      let _panelSavedSize = null
+
+      async function enterMiniMode() {
+        // Save current panel dimensions so we can restore later
+        _panelSavedSize = await api('get_panel_geometry')
+        document.body.classList.add('mini-mode')
+        miniProgressFill.style.width = '0%'
+        miniStatusText.textContent = 'Playing...'
+        // Collapse the pywebview window
+        await api('set_panel_mini', true)
+      }
+
+      async function exitMiniMode() {
+        document.body.classList.remove('mini-mode')
+        // Restore the pywebview window
+        await api('set_panel_mini', false)
+      }
+
+      miniAbortBtn.addEventListener('click', async () => {
+        await api('stop_workflow')
+      })
 
       // ---- Workflows Browser ----
       async function openWorkflowsBrowser() {
