@@ -1,0 +1,11 @@
+# Runtime
+pynput>=1.7.6
+pyobjc-framework-Quartz>=9.0
+pyobjc-framework-Cocoa>=9.0
+pywebview>=4.0
+
+# Packaging (py2app and its dependencies)
+py2app>=0.28
+macholib>=1.16
+altgraph>=0.17
+modulegraph>=0.19

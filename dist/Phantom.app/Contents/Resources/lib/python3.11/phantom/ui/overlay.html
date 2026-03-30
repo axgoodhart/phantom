@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Phantom Overlay</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+
+      #grid-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        pointer-events: none;
+        z-index: 1;
+        display: none;
+      }
+
+      .grid-line {
+        position: absolute;
+        background: rgba(0, 255, 136, 0.25);
+      }
+      .grid-line.horizontal {
+        width: 100%;
+        height: 1.5px;
+      }
+      .grid-line.vertical {
+        height: 100%;
+        width: 1.5px;
+      }
+
+      #cursor-indicator {
+        position: fixed;
+        width: 24px;
+        height: 24px;
+        background: #000000;
+        border: 2px solid #0073ff;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 100;
+        box-shadow: 0 0 12px rgba(3, 230, 255, 0.8);
+        transform: translate(-7px, -7px);
+        display: none;
+        transition: left 0.016s linear, top 0.016s linear;
+      }
+
+      #cursor-indicator.clicking {
+        transform: translate(-7px, -7px) scale(1.8);
+        border-color: #00ff88;
+        box-shadow: 0 0 20px rgba(0, 255, 136, 0.9);
+      }
+
+      .click-ripple {
+        position: fixed;
+        width: 24px;
+        height: 24px;
+        border: 2px solid #00ff88;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 99;
+        transform: translate(-12px, -12px);
+        animation: ripple 0.5s ease-out forwards;
+      }
+
+      @keyframes ripple {
+        0% {
+          transform: translate(-12px, -12px) scale(1);
+          opacity: 1;
+        }
+        100% {
+          transform: translate(-12px, -12px) scale(3);
+                  border: 2px solid #003cff;
+
+          opacity: 0;
+        }
+      }
+
+      .key-popup {
+        position: fixed;
+        left: 50%;
+        bottom: 20vh;
+        width: 94px;
+        height: 94px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(12, 12, 12, 0.58);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+        color: #f2f2f2;
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+        z-index: 200;
+        font-family:'Anxler', 'Menlo', 'Courier New', monospace;
+        font-size: 48px;
+        font-weight: bold;
+        text-transform: uppercase;
+        transform: translateX(-50%);
+        animation: keyFade 0.42s ease-out forwards;
+      }
+
+      @keyframes keyFade {
+        0% {
+          transform: translateX(-50%) translateY(8px) scale(0.42);
+          opacity: 0;
+        }
+        18% {
+          transform: translateX(-50%) translateY(0) scale(1);
+          opacity: 1;
+        }
+        100% {
+          transform: translateX(-50%) translateY(-2px) scale(1);
+          opacity: 0;
+        }
+      }
+
+      #record-countdown {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 120px;
+        height: 120px;
+        border-radius: 12px;
+        border: 1px solid rgba(0, 255, 136, 0.35);
+        background: rgba(0, 0, 0, 0.62);
+        color: red;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-family: 'Anxler', 'Menlo', 'Courier New', monospace;
+        font-size: 82px;
+        font-weight: bold;
+        z-index: 600;
+        pointer-events: none;
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+      }
+
+      #record-countdown.show {
+        animation: countdownPulse 0.95s ease-out forwards;
+      }
+
+      @keyframes countdownPulse {
+        0% {
+          transform: translate(-50%, -50%) scale(0.85);
+          opacity: 0;
+        }
+        20% {
+          transform: translate(-50%, -50%) scale(1);
+          opacity: 1;
+        }
+        100% {
+          transform: translate(-50%, -50%) scale(1.04);
+          opacity: 0;
+        }
+      }
+
+      .scroll-indicator {
+        position: fixed;
+        width: 20px;
+        height: 20px;
+        pointer-events: none;
+        z-index: 99;
+        transform: translate(-10px, -10px);
+        animation: scrollPulse 0.3s ease-out forwards;
+      }
+
+      .scroll-indicator::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 2px;
+        height: 12px;
+        background: #00ff88;
+        transform: translate(-50%, -50%);
+      }
+      .scroll-indicator.up::after {
+        transform: translate(-50%, -50%) rotate(0deg);
+      }
+      .scroll-indicator.down::after {
+        transform: translate(-50%, -50%) rotate(180deg);
+      }
+
+      @keyframes scrollPulse {
+        0% {
+          opacity: 0.9;
+        }
+        100% {
+          opacity: 0;
+        }
+      }
+
+      #record-prompt-backdrop {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.36);
+        z-index: 500;
+      }
+
+      #record-prompt {
+        width: min(420px, calc(100vw - 48px));
+        background: rgba(8, 8, 8, 0.97);
+        border: 1px solid #252525;
+        border-radius: 10px;
+        padding: 16px 16px 14px;
+        color: #e0e0e0;
+        font-family: 'Menlo', 'Courier New', monospace;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+      }
+
+      .record-prompt-title {
+        font-size: 15px;
+        letter-spacing: 0.4px;
+        color: #00ff88;
+        margin-bottom: 8px;
+      }
+
+      .record-prompt-subtitle {
+        font-size: 11px;
+        color: #a0a0a0;
+        line-height: 1.5;
+        margin-bottom: 10px;
+      }
+
+      .record-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: #c7c7c7;
+        margin: 6px 0;
+      }
+
+      .record-option input[type='checkbox'] {
+        width: 13px;
+        height: 13px;
+        accent-color: #00ff88;
+      }
+
+      .record-prompt-note {
+        margin-top: 10px;
+        font-size: 10px;
+        color: #8f8f8f;
+      }
+
+      .record-prompt-note.error {
+        color: #ff6b7a;
+      }
+
+      .record-prompt-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .record-prompt-btn {
+        font-family: 'Menlo', 'Courier New', monospace;
+        font-size: 11px;
+        letter-spacing: 0.6px;
+        border: 1px solid #333;
+        border-radius: 5px;
+        padding: 7px 14px;
+        background: #111;
+        color: #bbb;
+        cursor: pointer;
+      }
+
+      .record-prompt-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      .record-prompt-btn.primary {
+        border-color: #00ff88;
+        color: #00ff88;
+      }
+
+      .record-prompt-btn.primary:hover:not(:disabled) {
+        background: #00ff88;
+        color: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="grid-overlay"></div>
+    <div id="cursor-indicator"></div>
+    <div id="record-countdown" aria-hidden="true"></div>
+    <div id="record-prompt-backdrop">
+      <div
+        id="record-prompt"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Recording Options"
+      >
+        <div class="record-prompt-title">Recording Options</div>
+        <div class="record-prompt-subtitle">
+          Choose what to capture, then press SPACE or BEGIN to start recording.
+        </div>
+        <label class="record-option">
+          <input type="checkbox" id="recordOptResolution" checked />
+          <span>Record display resolution</span>
+        </label>
+        <label class="record-option">
+          <input type="checkbox" id="recordOptWindows" checked />
+          <span>Record window arrangement</span>
+        </label>
+        <div class="record-prompt-note" id="recordPromptMessage">
+          Press SPACE or click BEGIN to commence recording.
+        </div>
+        <div class="record-prompt-actions">
+          <button class="record-prompt-btn" id="recordCancel">Cancel</button>
+          <button class="record-prompt-btn primary" id="recordBegin">
+            BEGIN
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const cursor = document.getElementById('cursor-indicator')
+      const gridOverlay = document.getElementById('grid-overlay')
+      const recordPromptBackdrop = document.getElementById(
+        'record-prompt-backdrop'
+      )
+      const recordPromptMessage = document.getElementById('recordPromptMessage')
+      const recordOptResolution = document.getElementById('recordOptResolution')
+      const recordOptWindows = document.getElementById('recordOptWindows')
+      const recordBegin = document.getElementById('recordBegin')
+      const recordCancel = document.getElementById('recordCancel')
+      const recordCountdown = document.getElementById('record-countdown')
+      let recordPromptVisible = false
+      let recordPromptStarting = false
+      let recordCountdownToken = 0
+
+      // --- Cursor ---
+      function showCursor() {
+        cursor.style.display = 'block'
+      }
+
+      function hideCursor() {
+        cursor.style.display = 'none'
+        cursor.classList.remove('clicking')
+      }
+
+      function moveCursor(x, y) {
+        cursor.style.left = x + 'px'
+        cursor.style.top = y + 'px'
+      }
+
+      // --- Click effects ---
+      function showClick(x, y) {
+        // Flash the cursor
+        cursor.style.left = x + 'px'
+        cursor.style.top = y + 'px'
+        cursor.classList.add('clicking')
+        setTimeout(() => cursor.classList.remove('clicking'), 150)
+
+        // Ripple
+        const ripple = document.createElement('div')
+        ripple.className = 'click-ripple'
+        ripple.style.left = x + 'px'
+        ripple.style.top = y + 'px'
+        document.body.appendChild(ripple)
+        setTimeout(() => ripple.remove(), 500)
+      }
+
+      // --- Key press display ---
+      function showKeyPress(key) {
+        const popup = document.createElement('div')
+        popup.className = 'key-popup'
+        popup.textContent = toKeyGlyph(key)
+        document.body.appendChild(popup)
+        setTimeout(() => popup.remove(), 450)
+      }
+
+      function toKeyGlyph(key) {
+        const raw = String(key || '?').trim()
+        const lowered = raw.toLowerCase()
+        const glyphs = {
+          space: '␣',
+          enter: '↩',
+          return: '↩',
+          tab: '⇥',
+          backspace: '⌫',
+          delete: '⌦',
+          esc: '⎋',
+          escape: '⎋',
+          capslock: '⇪',
+          'caps lock': '⇪',
+          shift: '⇧',
+          cmd: '⌘',
+          command: '⌘',
+          ctrl: '⌃',
+          control: '⌃',
+          alt: '⌥',
+          option: '⌥',
+          up: '↑',
+          down: '↓',
+          left: '←',
+          right: '→'
+        }
+
+        if (glyphs[lowered]) {
+          return glyphs[lowered]
+        }
+        if (raw.length === 1) {
+          return raw.toUpperCase()
+        }
+        return raw.slice(0, 2).toUpperCase()
+      }
+
+      // --- Scroll indicator ---
+      function showScroll(x, y, dy) {
+        const indicator = document.createElement('div')
+        indicator.className = 'scroll-indicator ' + (dy > 0 ? 'down' : 'up')
+        indicator.style.left = x + 'px'
+        indicator.style.top = y + 'px'
+        document.body.appendChild(indicator)
+        setTimeout(() => indicator.remove(), 300)
+      }
+
+      // --- Grid ---
+      function showGrid(size) {
+        gridOverlay.innerHTML = ''
+        gridOverlay.style.display = 'block'
+
+        const w = window.innerWidth
+        const h = window.innerHeight
+
+        for (let x = 0; x <= w; x += size) {
+          const line = document.createElement('div')
+          line.className = 'grid-line vertical'
+          line.style.left = x + 'px'
+          gridOverlay.appendChild(line)
+        }
+        for (let y = 0; y <= h; y += size) {
+          const line = document.createElement('div')
+          line.className = 'grid-line horizontal'
+          line.style.top = y + 'px'
+          gridOverlay.appendChild(line)
+        }
+      }
+
+      function hideGrid() {
+        gridOverlay.style.display = 'none'
+        gridOverlay.innerHTML = ''
+      }
+
+      function setRecordPromptMessage(text, isError = false) {
+        recordPromptMessage.textContent = text
+        recordPromptMessage.classList.toggle('error', isError)
+      }
+
+      function setRecordPromptBusy(busy) {
+        recordOptResolution.disabled = busy
+        recordOptWindows.disabled = busy
+        recordBegin.disabled = busy
+        recordCancel.disabled = busy
+      }
+
+      function clearRecordCountdown() {
+        recordCountdown.classList.remove('show')
+        recordCountdown.style.display = 'none'
+        recordCountdown.textContent = ''
+      }
+
+      function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms))
+      }
+
+      async function runRecordCountdown() {
+        const token = ++recordCountdownToken
+        for (const value of [3, 2, 1]) {
+          if (token !== recordCountdownToken || !recordPromptVisible) {
+            return false
+          }
+          recordCountdown.textContent = String(value)
+          recordCountdown.style.display = 'flex'
+          recordCountdown.classList.remove('show')
+          void recordCountdown.offsetWidth
+          recordCountdown.classList.add('show')
+          setRecordPromptMessage(`Beginning in ${value}...`)
+          await sleep(1000)
+        }
+
+        if (token !== recordCountdownToken || !recordPromptVisible) {
+          return false
+        }
+
+        clearRecordCountdown()
+        return true
+      }
+
+      function showRecordPrompt() {
+        hideCursor()
+        recordPromptVisible = true
+        recordPromptStarting = false
+        recordCountdownToken += 1
+        clearRecordCountdown()
+        recordOptResolution.checked = true
+        recordOptWindows.checked = true
+        setRecordPromptBusy(false)
+        setRecordPromptMessage(
+          'Press SPACE or click BEGIN to commence recording.'
+        )
+        recordPromptBackdrop.style.display = 'flex'
+      }
+
+      function hideRecordPrompt() {
+        recordPromptVisible = false
+        recordPromptStarting = false
+        recordCountdownToken += 1
+        clearRecordCountdown()
+        setRecordPromptBusy(false)
+        recordPromptBackdrop.style.display = 'none'
+      }
+
+      async function beginRecordingFromPrompt() {
+        if (!recordPromptVisible || recordPromptStarting) {
+          return
+        }
+
+        recordPromptStarting = true
+        setRecordPromptBusy(true)
+        const countdownDone = await runRecordCountdown()
+        if (!countdownDone) {
+          recordPromptStarting = false
+          setRecordPromptBusy(false)
+          setRecordPromptMessage(
+            'Press SPACE or click BEGIN to commence recording.'
+          )
+          return
+        }
+
+        setRecordPromptMessage('')
+
+        if (!window.pywebview || !window.pywebview.api) {
+          recordPromptStarting = false
+          setRecordPromptBusy(false)
+          setRecordPromptMessage('Bridge unavailable.', true)
+          return
+        }
+
+        try {
+          const result =
+            await window.pywebview.api.begin_recording_from_overlay(
+              recordOptResolution.checked,
+              recordOptWindows.checked
+            )
+
+          if (!result || result.status !== 'recording') {
+            recordPromptStarting = false
+            setRecordPromptBusy(false)
+            const message =
+              (result && result.message) || 'Failed to start recording.'
+            setRecordPromptMessage(message, true)
+            return
+          }
+
+          hideRecordPrompt()
+          showCursor()
+        } catch (error) {
+          recordPromptStarting = false
+          setRecordPromptBusy(false)
+          setRecordPromptMessage(String(error), true)
+        }
+      }
+
+      async function cancelRecordPrompt() {
+        hideRecordPrompt()
+        if (window.pywebview && window.pywebview.api) {
+          try {
+            await window.pywebview.api.dismiss_recording_prompt()
+          } catch (error) {
+            console.error('Could not dismiss recording prompt:', error)
+          }
+        }
+      }
+
+      recordBegin.addEventListener('click', beginRecordingFromPrompt)
+      recordCancel.addEventListener('click', cancelRecordPrompt)
+
+      window.addEventListener('keydown', event => {
+        if (!recordPromptVisible) return
+        if (event.code === 'Space' || event.key === ' ') {
+          event.preventDefault()
+          beginRecordingFromPrompt()
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelRecordPrompt()
+        }
+      })
+    </script>
+  </body>
+</html>

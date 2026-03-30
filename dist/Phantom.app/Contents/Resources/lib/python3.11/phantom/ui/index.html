@@ -1,0 +1,2195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phantom</title>
+    <style>
+      @font-face {
+        font-family: Anxler;
+        src: local('Anxler'), url('Anxler.ttf') format('truetype');
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --accent: #00ff88;
+        --accent-rgb: 0, 255, 136;
+        --accent-muted: #44d98c;
+        --accent-muted-rgb: 68, 217, 140;
+      }
+
+      body.mode-playback {
+        --accent: #00e5ff;
+        --accent-rgb: 0, 229, 255;
+        --accent-muted: #44c8e0;
+        --accent-muted-rgb: 68, 200, 224;
+      }
+
+      body {
+        font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
+        font-size: 13px;
+        background: black;
+        color: #e0e0e0;
+        overflow-x: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-app-region: no-drag;
+        opacity: 0.3;
+        transition: opacity 0.25s ease;
+      }
+      body:hover {
+        opacity: 1;
+        transition: opacity 0.15s ease;
+      }
+
+      /* ---- Header ---- */
+      .top-bar {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: black;
+      }
+
+      .header {
+        text-align: center;
+        padding: 16px 16px 12px;
+        border-bottom: 1px solid #222;
+        background: black;
+        -webkit-app-region: drag !important;
+      }
+
+.header h1 {
+    font-family: Anxler, 'Menlo', 'SF Mono', 'Courier New', monospace;
+    font-size: 44px;
+    background: linear-gradient(200deg, black 30%, darkgreen, black, lime, black, white, black);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-repeat: both;
+    color: transparent;
+    background-size: 300% 300%;
+    animation: gradient 20s ease-in-out infinite;
+    -webkit-text-stroke: .5px lime;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+@keyframes gradient {
+    0% {
+        background-position: 0% 0%;
+        text-shadow: 0 0 1px transparent;
+    }
+    10% {
+        -webkit-text-stroke: .5px rgb(14, 130, 130);
+        }
+    19% {
+        text-shadow: 0 0 1px transparent;
+    }
+    50% {
+        -webkit-text-stroke: .5px transparent;
+        text-shadow: 0 0 2px lime;
+        background-position: 400% 50%
+    }
+    65% {
+        text-shadow: 0 0 2px deeppink;
+        -webkit-text-stroke: .5px transparent;
+    }
+    85% {
+        text-shadow: 0 0 2px black;
+        -webkit-text-stroke: .5px blue
+    }
+    100% {
+        background-position: 0% 800%;
+    }
+}
+      .header .subtitle {
+        font-size: 10px;
+        font-weight: 200;
+        letter-spacing: 1.3px;
+        color: lightgray;
+      }
+
+      /* ---- Mode Toggle ---- */
+      .mode-toggle {
+        display: flex;
+        background: #0a0a0a;
+        border-bottom: 1px solid #222;
+      }
+
+      .mode-tab {
+        flex: 1;
+        padding: 9px 0;
+        text-align: center;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: gray;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.15s ease;
+        background: none;
+        border-top: none;
+        border-left: none;
+        border-right: none;
+        font-family: inherit;
+        -webkit-app-region: no-drag;
+      }
+
+      .mode-tab:hover:not(:disabled) {
+        color: #999;
+      }
+
+      .mode-tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+
+      .mode-tab:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      /* ---- Playback Panel ---- */
+      .playback-panel {
+        display: none;
+      }
+      .playback-panel.visible {
+        display: block;
+      }
+      .record-panel.hidden {
+        display: none;
+      }
+
+      .workflow-info {
+        background: #0a0a0a;
+        border: 1px solid #222;
+        border-radius: 4px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+        font-size: 10px;
+        line-height: 1.7;
+        color: #888;
+      }
+
+      .workflow-info .wf-name {
+        font-size: 12px;
+        color: var(--accent-muted);
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .workflow-info span {
+        color: gray;
+      }
+
+      .workflow-info .wf-row {
+        display: flex;
+        gap: 16px;
+      }
+
+      .playback-progress {
+        height: 4px;
+        background: #222;
+        border-radius: 2px;
+        margin-top: 10px;
+        overflow: hidden;
+        display: none;
+      }
+
+      .playback-progress.active {
+        display: block;
+      }
+
+      .playback-progress-fill {
+        height: 100%;
+        background: var(--accent);
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.15s linear;
+      }
+
+      /* ---- Status Bar ---- */
+      .status-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        background: rgba(var(--accent-muted-rgb), 0.04);
+        border-bottom: 1px solid #1a1a1a;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #333;
+        flex-shrink: 0;
+      }
+
+      .status-dot.ready {
+        background: gray;
+      }
+      .status-dot.recording {
+        background: #ff3344;
+        animation: pulse 1.2s infinite;
+      }
+      .status-dot.stopped {
+        background: var(--accent-muted);
+      }
+      .status-dot.previewing {
+        background: #4488ff;
+        animation: pulse 1.2s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+
+      .status-text {
+        font-size: 11px;
+        color: #999;
+        flex: 1;
+      }
+
+      .status-count {
+        font-size: 10px;
+        color: var(--accent-muted);
+        background: rgba(var(--accent-muted-rgb), 0.1);
+        padding: 2px 8px;
+        border-radius: 10px;
+      }
+
+      /* ---- Sections ---- */
+      .section {
+        padding: 12px 16px;
+        margin-bottom: 5%;
+        border-top: 0.1px solid teal;
+        border-bottom: 1px solid #1a1a1a;
+      }
+
+      .section-title {
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--accent-muted);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+      }
+
+      /* ---- Buttons ---- */
+      .btn-row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        font-family: Anxler, 'Menlo', 'SF Mono', 'Courier New', monospace;
+        background: linear-gradient(180deg, #222, #1a1a1a);
+        color: #ccc;
+        border: 1px solid #333;
+        padding: 7px 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        transition: all 0.15s ease;
+        flex: 1;
+        text-align: center;
+        min-width: 0;
+        -webkit-app-region: no-drag;
+      }
+
+      .btn:hover:not(:disabled) {
+        background: linear-gradient(180deg, #2a2a2a, #222);
+        border-color: var(--accent-muted);
+        color: #fff;
+      }
+
+      .btn:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      .btn.primary {
+        border-color: var(--accent-muted);
+        color: var(--accent-muted);
+      }
+
+      .btn.primary:hover:not(:disabled) {
+        background: var(--accent-muted);
+        color: #000;
+      }
+
+      .btn.danger {
+        border-color: #ff3344;
+        color: #ff3344;
+      }
+
+      .btn.danger:hover:not(:disabled) {
+        background: #ff3344;
+        color: #fff;
+      }
+
+      /* Record button – red */
+      #btnRecord {
+        border-color: #ff3344;
+        color: #ff3344;
+      }
+      #btnRecord:hover:not(:disabled) {
+        background: #ff3344;
+        color: #fff;
+      }
+
+      /* Stop button – orange */
+      #btnStop {
+        border-color: #ff8800;
+        color: #ff8800;
+      }
+      #btnStop:hover:not(:disabled) {
+        background: #ff8800;
+        color: #fff;
+      }
+
+      .btn.recording-active {
+        background: #ff3344;
+        color: #fff;
+        border-color: #ff3344;
+        animation: pulse 1.5s infinite;
+      }
+
+      /* ---- Event Log ---- */
+      .event-log {
+        background: #0a0a0a;
+        border: 1px solid #222;
+        border-radius: 4px;
+        max-height: 200px;
+        overflow-y: auto;
+        font-size: 10px;
+        line-height: 1.6;
+      }
+
+      .event-log::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      .event-log::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .event-log::-webkit-scrollbar-thumb {
+        background: #333;
+        border-radius: 2px;
+      }
+
+      .event-item {
+        font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
+        padding: 1px 8px;
+        border-bottom: 1px solid #151515;
+        display: flex;
+        gap: 8px;
+      }
+
+      .event-item:last-child {
+        border-bottom: none;
+      }
+
+      .event-time {
+        color: gray;
+        min-width: 52px;
+        flex-shrink: 0;
+      }
+
+      .event-text {
+        color: #999;
+      }
+
+      .event-item.type-click .event-text {
+        color: #ff6688;
+      }
+      .event-item.type-key .event-text {
+        color: #88bbff;
+      }
+      .event-item.type-scroll .event-text {
+        color: #ffaa44;
+      }
+      .event-item.type-move .event-text {
+        color: gray;
+      }
+
+      .event-log-empty {
+        padding: 20px;
+        text-align: center;
+        color: #333;
+        font-size: 10px;
+      }
+
+      /* ---- Export Section ---- */
+      .export-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .export-input {
+        flex: 1;
+        background: #0a0a0a;
+        border: 1px solid #333;
+        border-radius: 4px;
+        padding: 7px 10px;
+        color: #e0e0e0;
+        font-family: inherit;
+        font-size: 11px;
+        outline: none;
+        -webkit-app-region: no-drag;
+      }
+
+      .export-input:focus {
+        border-color: var(--accent-muted);
+      }
+
+      .export-input::placeholder {
+        color: gray;
+      }
+
+      /* ---- Speed Control ---- */
+      .speed-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .speed-label {
+        font-size: 10px;
+        color: gray;
+        min-width: 36px;
+      }
+
+      .speed-slider {
+        flex: 1;
+        -webkit-appearance: none;
+        height: 3px;
+        background: #333;
+        border-radius: 2px;
+        outline: none;
+      }
+
+      .speed-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: radial-gradient(black, var(--accent-muted) 60%);
+        cursor: pointer;
+      }
+
+      .speed-value {
+        font-size: 11px;
+        color: var(--accent-muted);
+        min-width: 30px;
+        text-align: right;
+      }
+
+      /* ---- Grid Control ---- */
+      .grid-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .toggle {
+        position: relative;
+        width: 36px;
+        height: 20px;
+        background: #333;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: background 0.2s;
+        flex-shrink: 0;
+      }
+
+      .toggle.active {
+        background: var(--accent-muted);
+      }
+
+      .toggle-knob {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        background: #fff;
+        border-radius: 50%;
+        transition: transform 0.2s;
+      }
+
+      .toggle.active .toggle-knob {
+        transform: translateX(16px);
+      }
+
+      .grid-label {
+        font-size: 10px;
+        color: gray;
+      }
+
+      .grid-size-slider {
+        flex: 1;
+        -webkit-appearance: none;
+        height: 3px;
+        background: #333;
+        border-radius: 2px;
+        outline: none;
+      }
+
+      .grid-size-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--accent-muted);
+        cursor: pointer;
+      }
+
+      .grid-size-value {
+        font-size: 10px;
+        color: gray;
+        min-width: 30px;
+        text-align: right;
+      }
+
+      /* ---- Progress Bar ---- */
+      .progress-bar {
+        height: 3px;
+        background: #222;
+        border-radius: 2px;
+        margin-top: 8px;
+        overflow: hidden;
+        display: none;
+      }
+
+      .progress-bar.active {
+        display: block;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: #4488ff;
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.1s linear;
+      }
+
+      /* ---- Environment Info ---- */
+      .env-info {
+        font-size: 10px;
+        color: gray;
+        line-height: 1.6;
+      }
+
+      .env-info span {
+        color: gray;
+      }
+
+      /* ---- Overlays ---- */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        z-index: 1200;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+
+      .modal-overlay.visible {
+        display: flex;
+      }
+
+      .modal {
+        width: 100%;
+        max-width: 320px;
+        background: #0b0b0b;
+        border: 1px solid #222;
+        border-radius: 8px;
+        padding: 14px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+      }
+
+      .modal-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-muted);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+      }
+
+      .modal-text {
+        font-size: 11px;
+        color: #888;
+        line-height: 1.6;
+        margin-bottom: 10px;
+      }
+
+      .modal-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: #bbb;
+        padding: 4px 0;
+      }
+
+      .modal-row input[type='checkbox'] {
+        accent-color: var(--accent-muted);
+      }
+
+      .modal-note {
+        font-size: 10px;
+        color: gray;
+        margin-top: 8px;
+      }
+
+      /* ---- Loop Controls ---- */
+      .loop-controls {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #1a1a1a;
+      }
+
+      .loop-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: #bbb;
+        padding: 3px 0;
+      }
+
+      .loop-label {
+        font-size: 10px;
+        color: gray;
+        min-width: 32px;
+      }
+
+      .loop-input {
+        width: 52px;
+        padding: 3px 6px;
+        background: #111;
+        border: 1px solid #333;
+        border-radius: 4px;
+        color: #ddd;
+        font-size: 11px;
+        font-family: inherit;
+        text-align: center;
+        outline: none;
+      }
+
+      .loop-input:focus {
+        border-color: var(--accent-muted);
+      }
+
+      .loop-ping-input {
+        flex: 1;
+        padding: 3px 6px;
+        background: #111;
+        border: 1px solid #333;
+        border-radius: 4px;
+        color: #ddd;
+        font-size: 10px;
+        font-family: inherit;
+        outline: none;
+      }
+
+      .loop-ping-input:focus {
+        border-color: var(--accent-muted);
+      }
+
+      .loop-ping-input::placeholder {
+        color: #444;
+      }
+
+      .loop-inf-label {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 11px;
+        color: #888;
+        cursor: pointer;
+        margin-left: 2px;
+      }
+
+      .loop-inf-label input {
+        accent-color: var(--accent-muted);
+      }
+
+      .loop-status {
+        font-size: 10px;
+        color: var(--accent-muted);
+        margin-top: 4px;
+        display: none;
+      }
+
+      .loop-status.active {
+        display: block;
+      }
+
+      /* ---- Workflows Browser Modal ---- */
+      .workflow-list {
+        max-height: 320px;
+        overflow-y: auto;
+        margin: 8px 0;
+      }
+
+      .workflow-list::-webkit-scrollbar { width: 4px; }
+      .workflow-list::-webkit-scrollbar-track { background: transparent; }
+      .workflow-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+      .workflow-entry {
+        display: flex;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid #222;
+        border-radius: 4px;
+        margin-bottom: 4px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        background: #0a0a0a;
+      }
+
+      .workflow-entry:hover {
+        border-color: var(--accent-muted);
+        background: rgba(var(--accent-muted-rgb), 0.05);
+      }
+
+      .workflow-entry.selected {
+        border-color: var(--accent-muted);
+        background: rgba(var(--accent-muted-rgb), 0.1);
+      }
+
+      .workflow-entry-info {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .workflow-entry-name {
+        font-size: 11px;
+        font-weight: 600;
+        color: #ddd;
+        margin-bottom: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .workflow-entry.selected .workflow-entry-name {
+        color: var(--accent-muted);
+      }
+
+      .workflow-entry-meta {
+        font-size: 9px;
+        color: #666;
+        display: flex;
+        gap: 10px;
+      }
+
+      .workflow-entry-delete {
+        background: none;
+        border: 1px solid transparent;
+        color: #555;
+        font-size: 13px;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 4px;
+        flex-shrink: 0;
+        transition: all 0.15s ease;
+        font-family: inherit;
+      }
+
+      .workflow-entry-delete:hover {
+        color: #ff3344;
+        border-color: #ff3344;
+      }
+
+      .workflow-list-empty {
+        text-align: center;
+        padding: 24px;
+        color: #444;
+        font-size: 10px;
+      }
+
+      .perm-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: #777;
+        padding: 6px 0;
+        border-bottom: 1px solid #151515;
+        cursor: pointer;
+      }
+
+      .perm-status:last-child {
+        border-bottom: none;
+      }
+
+      .perm-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #333;
+        flex-shrink: 0;
+      }
+
+      .perm-status.ok {
+        color: #ccc;
+      }
+
+      .perm-status.ok .perm-dot {
+        background: var(--accent-muted);
+      }
+
+      .perm-status:hover {
+        color: #bbb;
+      }
+
+      .perm-actions {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+      }
+
+      .perm-action {
+        font-family: Anxler, 'Menlo', 'SF Mono', 'Courier New', monospace;
+        font-size: 9px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        border: 1px solid #333;
+        background: #0f0f0f;
+        color: #999;
+        cursor: pointer;
+      }
+
+      .perm-action:hover {
+        color: #fff;
+        border-color: var(--accent-muted);
+      }
+
+      .perm-action.primary {
+        border-color: var(--accent-muted);
+        color: var(--accent-muted);
+      }
+
+      .perm-action.primary:hover {
+        background: var(--accent-muted);
+        color: #000;
+      }
+
+      body.modal-open {
+        overflow: hidden;
+      }
+
+      /* ---- Footer ---- */
+      .footer {
+        padding: 10px 16px;
+        text-align: center;
+        font-size: 9px;
+        color: #333;
+      }
+
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%) translateY(100px);
+        background: var(--accent);
+        color: #000;
+        padding: 8px 20px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        z-index: 2000;
+        transition: transform 0.3s ease;
+        pointer-events: none;
+      }
+
+      .toast.visible {
+        transform: translateX(-50%) translateY(0);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top-bar">
+      <div class="header pywebview-drag-region">
+        <h1>PHANTOM</h1>
+        <div class="subtitle">macOS Input Recording & Replay</div>
+      </div>
+
+      <!-- Mode Toggle -->
+      <div class="mode-toggle">
+        <button class="mode-tab active" id="tabRecord">Record</button>
+        <button class="mode-tab" id="tabPlayback">Playback</button>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot ready" id="statusDot"></div>
+        <div class="status-text" id="statusText">Ready</div>
+        <div class="status-count" id="statusCount" style="display: none">
+          0 events
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== Record Panel ====== -->
+    <div id="recordPanel" class="record-panel">
+      <!-- Recording Controls -->
+      <div class="section">
+        <div class="section-title">Recording</div>
+        <div class="btn-row">
+          <button class="btn primary" id="btnRecord">Record</button>
+          <button class="btn danger" id="btnStop" disabled>Stop</button>
+          <button class="btn" id="btnClear" disabled>Clear</button>
+        </div>
+      </div>
+
+      <!-- Event Log -->
+      <div class="section">
+        <div class="section-title">Event Log</div>
+        <div class="event-log" id="eventLog">
+          <div class="event-log-empty">No events recorded</div>
+        </div>
+      </div>
+
+      <!-- Export -->
+      <div class="section">
+        <div class="section-title">Export Workflow</div>
+        <div class="export-row">
+          <input
+            type="text"
+            class="export-input"
+            id="workflowName"
+            placeholder="Workflow name..."
+            disabled
+          />
+          <button class="btn primary" id="btnExport" disabled>Save</button>
+        </div>
+        <div class="speed-row" style="margin-top: 8px">
+          <span class="speed-label">Speed</span>
+          <input
+            type="range"
+            class="speed-slider"
+            id="exportSpeed"
+            min="0.25"
+            max="4"
+            step="0.25"
+            value="1"
+            disabled
+          />
+          <span class="speed-value" id="exportSpeedValue">1x</span>
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div class="section">
+        <div class="section-title">Preview Replay</div>
+        <div class="btn-row">
+          <button class="btn" id="btnPreview" disabled>Preview</button>
+          <button class="btn" id="btnStopPreview" disabled>Stop</button>
+        </div>
+        <div class="speed-row" style="margin-top: 8px">
+          <span class="speed-label">Speed</span>
+          <input
+            type="range"
+            class="speed-slider"
+            id="previewSpeed"
+            min="0.25"
+            max="4"
+            step="0.25"
+            value="1"
+            disabled
+          />
+          <span class="speed-value" id="previewSpeedValue">1x</span>
+        </div>
+        <div class="progress-bar" id="previewProgress">
+          <div class="progress-fill" id="previewProgressFill"></div>
+        </div>
+      </div>
+
+      <!-- Grid Overlay -->
+      <div class="section">
+        <div class="section-title">Grid Overlay</div>
+        <div class="grid-row">
+          <div class="toggle" id="gridToggle">
+            <div class="toggle-knob"></div>
+          </div>
+          <span class="grid-label">Show Grid</span>
+          <input
+            type="range"
+            class="grid-size-slider"
+            id="gridSize"
+            min="20"
+            max="150"
+            value="50"
+          />
+          <span class="grid-size-value" id="gridSizeValue">50px</span>
+        </div>
+      </div>
+
+      <!-- Environment Info -->
+      <div class="section" id="envSection" style="display: none">
+        <div class="section-title">Environment</div>
+        <div class="env-info" id="envInfo"></div>
+      </div>
+    </div>
+    <!-- /recordPanel -->
+
+    <!-- ====== Playback Panel ====== -->
+    <div id="playbackPanel" class="playback-panel">
+      <div class="section">
+        <div class="section-title">Workflow File</div>
+        <button class="btn primary" id="btnOpenWorkflow" style="width: 100%">
+          Browse Workflows...
+        </button>
+        <div class="workflow-info" id="workflowInfo" style="display: none">
+          <div class="wf-name" id="wfName"></div>
+          <div class="wf-row">
+            <div><span>Recorded:</span> <span id="wfDate"></span></div>
+            <div><span>Resolution:</span> <span id="wfRes"></span></div>
+          </div>
+          <div class="wf-row">
+            <div><span>Actions:</span> <span id="wfActions"></span></div>
+            <div><span>Duration:</span> <span id="wfDuration"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section" id="playbackControls" style="display: none">
+        <div class="section-title">Run Workflow</div>
+        <div class="speed-row" style="margin-bottom: 8px">
+          <span class="speed-label">Speed</span>
+          <input
+            type="range"
+            class="speed-slider"
+            id="playbackSpeed"
+            min="0.25"
+            max="4"
+            step="0.25"
+            value="1"
+          />
+          <span class="speed-value" id="playbackSpeedValue">1x</span>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary" id="btnRunWorkflow">Run</button>
+          <button class="btn danger" id="btnStopWorkflow" disabled>Stop</button>
+          <button class="btn" id="btnClearWorkflow">Unload</button>
+        </div>
+        <div class="playback-progress" id="playbackProgress">
+          <div class="playback-progress-fill" id="playbackProgressFill"></div>
+        </div>
+        <div class="loop-status" id="loopStatus"></div>
+      </div>
+
+      <div class="section" id="workflowPreviewSection" style="display: none">
+        <div class="section-title">Preview Replay</div>
+        <div class="btn-row">
+          <button class="btn" id="btnWorkflowPreview">Preview</button>
+          <button class="btn" id="btnStopWorkflowPreview" disabled>Stop</button>
+        </div>
+        <div class="progress-bar" id="workflowPreviewProgress">
+          <div class="progress-fill" id="workflowPreviewProgressFill"></div>
+        </div>
+      </div>
+    </div>
+    <!-- /playbackPanel -->
+
+    <!-- Permissions Overlay -->
+    <div class="modal-overlay" id="permissionOverlay">
+      <div class="modal">
+        <div class="modal-title">Permissions Required</div>
+        <div class="modal-text">
+          Click a permission to trigger the system prompt, or open settings.
+        </div>
+        <div class="perm-status" id="permAccessibility">
+          <div class="perm-dot"></div>
+          <div>Accessibility</div>
+          <div class="perm-actions">
+            <button class="perm-action primary" id="btnRequestAccessibility">
+              Request
+            </button>
+            <button class="perm-action" id="btnOpenAccessibility">
+              Open Settings
+            </button>
+          </div>
+        </div>
+        <div class="perm-status" id="permAutomation">
+          <div class="perm-dot"></div>
+          <div>Automation</div>
+          <div class="perm-actions">
+            <button class="perm-action primary" id="btnRequestAutomation">
+              Request
+            </button>
+            <button class="perm-action" id="btnOpenAutomation">
+              Open Settings
+            </button>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top: 10px">
+          <button class="btn primary" id="btnPermCheck">Check Again</button>
+          <button class="btn" id="btnPermBypass">Continue Anyway</button>
+        </div>
+        <div class="modal-note">
+          Grant permissions in System Settings > Privacy &amp; Security.
+        </div>
+      </div>
+    </div>
+
+    <!-- Playback Options Overlay -->
+    <div class="modal-overlay" id="playbackOverlay">
+      <div class="modal">
+        <div class="modal-title">Playback Options</div>
+        <label class="modal-row">
+          <input type="checkbox" id="optMatchRes" checked />
+          <span>Match recording's resolution</span>
+        </label>
+        <label class="modal-row">
+          <input type="checkbox" id="optMatchWindows" checked />
+          <span>Match recording's window arrangement</span>
+        </label>
+        <div class="speed-row" style="margin: 8px 0 2px">
+          <span class="speed-label">Speed</span>
+          <input
+            type="range"
+            class="speed-slider"
+            id="optSpeed"
+            min="0.25"
+            max="4"
+            step="0.25"
+            value="1"
+          />
+          <span class="speed-value" id="optSpeedValue">1x</span>
+        </div>
+        <label class="modal-row">
+          <input type="checkbox" id="optCompletionSound" />
+          <span>Play sound on completion</span>
+        </label>
+        <div class="loop-controls">
+          <div class="loop-row">
+            <span class="loop-label">Loop</span>
+            <input
+              type="number"
+              class="loop-input"
+              id="optLoopCount"
+              min="1"
+              max="9999"
+              value="1"
+            />
+            <span class="loop-label" style="color: #555">times</span>
+            <label class="loop-inf-label">
+              <input type="checkbox" id="optLoopInfinite" />
+              <span>∞</span>
+            </label>
+          </div>
+          <div class="loop-row">
+            <span class="loop-label">Delay</span>
+            <input
+              type="number"
+              class="loop-input"
+              id="optLoopDelay"
+              min="0"
+              max="3600"
+              step="0.5"
+              value="0"
+            />
+            <span class="loop-label" style="color: #555">sec between runs</span>
+          </div>
+          <div class="loop-row">
+            <span class="loop-label">Ping</span>
+            <input
+              type="text"
+              class="loop-ping-input"
+              id="optLoopPing"
+              placeholder="URL to check between runs (optional)"
+            />
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top: 10px">
+          <button class="btn primary" id="btnStartPlayback">Start</button>
+          <button class="btn" id="btnCancelPlayback">Cancel</button>
+        </div>
+        <div class="modal-note" id="playbackTimeoutNote">
+          Chime at 20s. Auto-start at 35s if no response.
+        </div>
+      </div>
+    </div>
+
+    <!-- Workflows Browser Overlay -->
+    <div class="modal-overlay" id="workflowsOverlay">
+      <div class="modal" style="max-width: 360px">
+        <div class="modal-title">Workflows</div>
+        <div class="workflow-list" id="workflowList">
+          <div class="workflow-list-empty">No saved workflows</div>
+        </div>
+        <div class="btn-row" style="margin-top: 8px">
+          <button class="btn primary" id="btnLoadSelected" disabled>
+            Load
+          </button>
+          <button class="btn" id="btnCloseWorkflows">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">Phantom v1.0</div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      // ---- State ----
+      let isRecording = false
+      let isPreviewing = false
+      let hasRecording = false
+      let recordingSaved = false
+      let gridActive = false
+      let pollInterval = null
+      let eventCount = 0
+      let moveSkipCounter = 0
+      let currentMode = 'record' // 'record' | 'playback'
+      let isPlaybackRunning = false
+      let isWorkflowPreviewing = false
+      let workflowLoaded = false
+      let permissionsReady = false
+      let permissionsBypassed = false
+      let permPollInterval = null
+      let playbackPromptTimer = null
+      let playbackAutoTimer = null
+
+      // ---- Elements ----
+      const statusDot = document.getElementById('statusDot')
+      const statusText = document.getElementById('statusText')
+      const statusCount = document.getElementById('statusCount')
+      const btnRecord = document.getElementById('btnRecord')
+      const btnStop = document.getElementById('btnStop')
+      const btnClear = document.getElementById('btnClear')
+      const eventLog = document.getElementById('eventLog')
+      const workflowName = document.getElementById('workflowName')
+      const btnExport = document.getElementById('btnExport')
+      const exportSpeed = document.getElementById('exportSpeed')
+      const exportSpeedValue = document.getElementById('exportSpeedValue')
+      const btnPreview = document.getElementById('btnPreview')
+      const btnStopPreview = document.getElementById('btnStopPreview')
+      const previewSpeed = document.getElementById('previewSpeed')
+      const previewSpeedValue = document.getElementById('previewSpeedValue')
+      const previewProgress = document.getElementById('previewProgress')
+      const previewProgressFill = document.getElementById('previewProgressFill')
+      const gridToggle = document.getElementById('gridToggle')
+      const gridSize = document.getElementById('gridSize')
+      const gridSizeValue = document.getElementById('gridSizeValue')
+      const envSection = document.getElementById('envSection')
+      const envInfo = document.getElementById('envInfo')
+      const toast = document.getElementById('toast')
+      const permissionOverlay = document.getElementById('permissionOverlay')
+      const permAccessibility = document.getElementById('permAccessibility')
+      const permAutomation = document.getElementById('permAutomation')
+      const btnPermCheck = document.getElementById('btnPermCheck')
+      const btnRequestAccessibility = document.getElementById(
+        'btnRequestAccessibility'
+      )
+      const btnRequestAutomation = document.getElementById(
+        'btnRequestAutomation'
+      )
+      const btnOpenAccessibility = document.getElementById(
+        'btnOpenAccessibility'
+      )
+      const btnOpenAutomation = document.getElementById('btnOpenAutomation')
+      const btnPermBypass = document.getElementById('btnPermBypass')
+      const playbackOverlay = document.getElementById('playbackOverlay')
+      const optMatchRes = document.getElementById('optMatchRes')
+      const optMatchWindows = document.getElementById('optMatchWindows')
+      const optSpeed = document.getElementById('optSpeed')
+      const optSpeedValue = document.getElementById('optSpeedValue')
+      const optCompletionSound = document.getElementById('optCompletionSound')
+      const btnStartPlayback = document.getElementById('btnStartPlayback')
+      const btnCancelPlayback = document.getElementById('btnCancelPlayback')
+      const playbackTimeoutNote = document.getElementById('playbackTimeoutNote')
+      const optLoopCount = document.getElementById('optLoopCount')
+      const optLoopInfinite = document.getElementById('optLoopInfinite')
+      const optLoopDelay = document.getElementById('optLoopDelay')
+      const optLoopPing = document.getElementById('optLoopPing')
+      const loopStatus = document.getElementById('loopStatus')
+
+      // Playback elements
+      const tabRecord = document.getElementById('tabRecord')
+      const tabPlayback = document.getElementById('tabPlayback')
+      const recordPanel = document.getElementById('recordPanel')
+      const playbackPanel = document.getElementById('playbackPanel')
+      const btnOpenWorkflow = document.getElementById('btnOpenWorkflow')
+      const workflowInfo = document.getElementById('workflowInfo')
+      const wfName = document.getElementById('wfName')
+      const wfDate = document.getElementById('wfDate')
+      const wfRes = document.getElementById('wfRes')
+      const wfActions = document.getElementById('wfActions')
+      const wfDuration = document.getElementById('wfDuration')
+      const playbackControls = document.getElementById('playbackControls')
+      const playbackSpeed = document.getElementById('playbackSpeed')
+      const playbackSpeedValue = document.getElementById('playbackSpeedValue')
+      const btnRunWorkflow = document.getElementById('btnRunWorkflow')
+      const btnStopWorkflow = document.getElementById('btnStopWorkflow')
+      const btnClearWorkflow = document.getElementById('btnClearWorkflow')
+      const playbackProgress = document.getElementById('playbackProgress')
+      const playbackProgressFill = document.getElementById(
+        'playbackProgressFill'
+      )
+      const workflowPreviewSection = document.getElementById('workflowPreviewSection')
+      const btnWorkflowPreview = document.getElementById('btnWorkflowPreview')
+      const btnStopWorkflowPreview = document.getElementById('btnStopWorkflowPreview')
+      const workflowPreviewProgress = document.getElementById('workflowPreviewProgress')
+      const workflowPreviewProgressFill = document.getElementById('workflowPreviewProgressFill')
+
+      // Workflows browser elements
+      const workflowsOverlay = document.getElementById('workflowsOverlay')
+      const workflowList = document.getElementById('workflowList')
+      const btnLoadSelected = document.getElementById('btnLoadSelected')
+      const btnCloseWorkflows = document.getElementById('btnCloseWorkflows')
+
+      let selectedWorkflowFilename = null
+
+      // ---- Wait for pywebview ----
+      function onReady() {
+        console.log('pywebview API ready')
+        document.body.classList.add('mode-record')
+        checkPermissions()
+      }
+
+      if (window.pywebview) {
+        onReady()
+      } else {
+        window.addEventListener('pywebviewready', onReady)
+      }
+
+      // ---- API helpers ----
+      async function api(method, ...args) {
+        if (!window.pywebview || !window.pywebview.api) {
+          console.warn('API not ready')
+          return null
+        }
+        try {
+          return await window.pywebview.api[method](...args)
+        } catch (e) {
+          console.error(`API error (${method}):`, e)
+          return null
+        }
+      }
+
+      // ---- Toast ----
+      function showToast(msg) {
+        toast.textContent = msg
+        toast.classList.add('visible')
+        setTimeout(() => toast.classList.remove('visible'), 2500)
+      }
+
+      // ---- Permissions ----
+      function updateModalState() {
+        const open =
+          permissionOverlay.classList.contains('visible') ||
+          playbackOverlay.classList.contains('visible') ||
+          workflowsOverlay.classList.contains('visible')
+        document.body.classList.toggle('modal-open', open)
+      }
+
+      function updatePermissionStatus(status) {
+        if (!status) return
+        const accessOk = !!status.accessibility
+        const autoOk = !!status.automation
+        permAccessibility.classList.toggle('ok', accessOk)
+        permAutomation.classList.toggle('ok', autoOk)
+        permissionsReady = accessOk && autoOk
+      }
+
+      function showPermissionOverlay() {
+        if (permissionsBypassed) {
+          return
+        }
+        permissionOverlay.classList.add('visible')
+        updateModalState()
+        if (!permPollInterval) {
+          permPollInterval = setInterval(checkPermissions, 2000)
+        }
+      }
+
+      function hidePermissionOverlay() {
+        permissionOverlay.classList.remove('visible')
+        updateModalState()
+      }
+
+      async function checkPermissions() {
+        const status = await api('get_permissions_status')
+        updatePermissionStatus(status)
+        if (permissionsReady) {
+          hidePermissionOverlay()
+          if (permPollInterval) {
+            clearInterval(permPollInterval)
+            permPollInterval = null
+          }
+        } else {
+          showPermissionOverlay()
+        }
+      }
+
+      btnPermCheck.addEventListener('click', checkPermissions)
+
+      async function requestAccessibility() {
+        const status = await api('request_accessibility')
+        updatePermissionStatus(status)
+        checkPermissions()
+      }
+
+      async function requestAutomation() {
+        const status = await api('request_automation')
+        updatePermissionStatus(status)
+        checkPermissions()
+      }
+
+      permAccessibility.addEventListener('click', () => requestAccessibility())
+      permAutomation.addEventListener('click', () => requestAutomation())
+      btnRequestAccessibility.addEventListener('click', e => {
+        e.stopPropagation()
+        requestAccessibility()
+      })
+      btnRequestAutomation.addEventListener('click', e => {
+        e.stopPropagation()
+        requestAutomation()
+      })
+
+      btnOpenAccessibility.addEventListener('click', async e => {
+        e.stopPropagation()
+        await api('open_accessibility_settings')
+      })
+
+      btnOpenAutomation.addEventListener('click', async e => {
+        e.stopPropagation()
+        await api('open_automation_settings')
+      })
+
+      btnPermBypass.addEventListener('click', () => {
+        permissionsBypassed = true
+        hidePermissionOverlay()
+        showToast('Continuing without permissions')
+      })
+
+      // ---- Recording ----
+      function applyRecordingStarted(result) {
+        if (!result || result.status !== 'recording') return
+        isRecording = true
+        hasRecording = false
+        recordingSaved = false
+        eventCount = 0
+
+        // Update UI
+        const backendLabel = result.keyboard_backend
+          ? ` (${result.keyboard_backend})`
+          : ''
+        setStatus('recording', `Recording${backendLabel}...`)
+        btnRecord.disabled = true
+        btnStop.disabled = false
+        btnClear.disabled = true
+        btnExport.disabled = true
+        btnPreview.disabled = true
+        workflowName.disabled = true
+        exportSpeed.disabled = true
+        previewSpeed.disabled = true
+        updateTabStates()
+
+        // Show environment
+        if (result.environment) {
+          showEnvironment(result.environment)
+        }
+
+        // Clear event log
+        eventLog.innerHTML = ''
+
+        // Start polling for events
+        startPolling()
+      }
+
+      btnRecord.addEventListener('click', async () => {
+        if (!permissionsReady && !permissionsBypassed) {
+          showPermissionOverlay()
+          return
+        }
+
+        const result = await api('show_recording_prompt')
+        if (!result) return
+
+        if (result.status === 'shown') {
+          setStatus('ready', 'Press SPACE or BEGIN on overlay')
+          return
+        }
+
+        if (result.status === 'already_recording') {
+          return
+        }
+
+        if (result.status === 'error') {
+          showToast(result.message || 'Could not open recording prompt')
+          return
+        }
+      })
+
+      // Called from Python when overlay prompt begins recording.
+      function onRecordingBeganFromOverlay(result) {
+        applyRecordingStarted(result)
+      }
+
+      // Called from Python when overlay prompt is cancelled.
+      function onRecordingPromptDismissed() {
+        if (!isRecording) {
+          setStatus('ready', 'Ready')
+        }
+      }
+
+      btnStop.addEventListener('click', async () => {
+        const result = await api('stop_recording')
+        if (!result) return
+
+        isRecording = false
+        hasRecording = result.event_count > 0
+        stopPolling()
+
+        // Final poll to get remaining events
+        await pollEvents()
+
+        setStatus(
+          'stopped',
+          `Stopped: ${result.event_count} events, ${result.duration}s`
+        )
+        statusCount.textContent = result.event_count + ' events'
+        statusCount.style.display = 'inline'
+
+        btnRecord.disabled = false
+        btnStop.disabled = true
+        btnClear.disabled = !hasRecording
+        btnExport.disabled = !hasRecording
+        btnPreview.disabled = !hasRecording
+        workflowName.disabled = !hasRecording
+        exportSpeed.disabled = !hasRecording
+        previewSpeed.disabled = !hasRecording
+        updateTabStates()
+      })
+
+      btnClear.addEventListener('click', async () => {
+        await api('clear_recording')
+        hasRecording = false
+        recordingSaved = false
+        eventCount = 0
+
+        setStatus('ready', 'Ready')
+        statusCount.style.display = 'none'
+        eventLog.innerHTML =
+          '<div class="event-log-empty">No events recorded</div>'
+        envSection.style.display = 'none'
+
+        btnClear.disabled = true
+        btnExport.disabled = true
+        btnPreview.disabled = true
+        workflowName.disabled = true
+        exportSpeed.disabled = true
+        previewSpeed.disabled = true
+        updateTabStates()
+      })
+
+      // ---- Event Polling ----
+      function startPolling() {
+        if (pollInterval) clearInterval(pollInterval)
+        pollInterval = setInterval(pollEvents, 50)
+      }
+
+      function stopPolling() {
+        if (pollInterval) {
+          clearInterval(pollInterval)
+          pollInterval = null
+        }
+      }
+
+      async function pollEvents() {
+        const events = await api('get_pending_events')
+        if (!events || events.length === 0) return
+
+        eventCount += events.length
+
+        // Update status count
+        statusCount.textContent = eventCount + ' events'
+        statusCount.style.display = 'inline'
+
+        // Remove empty placeholder
+        const empty = eventLog.querySelector('.event-log-empty')
+        if (empty) empty.remove()
+
+        // Add events to log (skip most mouse moves to keep log readable)
+        for (const ev of events) {
+          if (ev.type === 'move') {
+            moveSkipCounter++
+            if (moveSkipCounter % 20 !== 0) continue
+          }
+
+          const item = document.createElement('div')
+          item.className = 'event-item type-' + ev.type
+          item.innerHTML = `
+                    <span class="event-time">${ev.time.toFixed(3)}s</span>
+                    <span class="event-text">${escapeHtml(ev.text)}</span>
+                `
+          eventLog.appendChild(item)
+        }
+
+        // Keep log manageable
+        while (eventLog.children.length > 200) {
+          eventLog.removeChild(eventLog.firstChild)
+        }
+
+        // Auto-scroll
+        eventLog.scrollTop = eventLog.scrollHeight
+      }
+
+      // ---- Export ----
+      btnExport.addEventListener('click', async () => {
+        const name = workflowName.value.trim() || null
+        const speed = parseFloat(exportSpeed.value)
+
+        btnExport.disabled = true
+        btnExport.textContent = 'Saving...'
+
+        const result = await api('save_workflow', name, speed)
+
+        btnExport.disabled = false
+        btnExport.textContent = 'Save'
+
+        if (!result) return
+
+        if (result.status === 'saved') {
+          recordingSaved = true
+          updateTabStates()
+          showToast(`Saved: ${result.filename}`)
+        } else if (result.status === 'error') {
+          showToast('Error: ' + (result.message || 'Unknown'))
+        } else if (result.status === 'no_events') {
+          showToast('No events to export')
+        }
+      })
+
+      exportSpeed.addEventListener('input', () => {
+        exportSpeedValue.textContent = exportSpeed.value + 'x'
+      })
+
+      // ---- Preview ----
+      btnPreview.addEventListener('click', async () => {
+        const speed = parseFloat(previewSpeed.value)
+        const result = await api('start_preview', speed)
+        if (!result || result.status !== 'previewing') return
+
+        isPreviewing = true
+        btnPreview.disabled = true
+        btnStopPreview.disabled = false
+        btnRecord.disabled = true
+        btnExport.disabled = true
+        updateTabStates()
+
+        previewProgress.classList.add('active')
+        previewProgressFill.style.width = '0%'
+        setStatus('previewing', 'Previewing...')
+      })
+
+      btnStopPreview.addEventListener('click', async () => {
+        await api('stop_preview')
+        onPreviewDone()
+      })
+
+      previewSpeed.addEventListener('input', () => {
+        previewSpeedValue.textContent = previewSpeed.value + 'x'
+      })
+
+      // Called from Python when preview finishes (record or workflow)
+      function updatePreviewProgress(pct, current, total) {
+        if (isWorkflowPreviewing) {
+          workflowPreviewProgressFill.style.width = pct + '%'
+        } else {
+          previewProgressFill.style.width = pct + '%'
+        }
+        statusText.textContent = `Preview: ${current}/${total} (${pct}%)`
+      }
+
+      function onPreviewComplete() {
+        if (isWorkflowPreviewing) {
+          onWorkflowPreviewDone()
+        } else {
+          onPreviewDone()
+        }
+        showToast('Preview complete')
+      }
+
+      function onPreviewDone() {
+        isPreviewing = false
+        btnPreview.disabled = false
+        btnStopPreview.disabled = true
+        btnRecord.disabled = false
+        btnExport.disabled = !hasRecording
+        updateTabStates()
+
+        previewProgress.classList.remove('active')
+        setStatus('stopped', `${eventCount} events recorded`)
+      }
+
+      function onWorkflowPreviewDone() {
+        isWorkflowPreviewing = false
+        btnWorkflowPreview.disabled = false
+        btnStopWorkflowPreview.disabled = true
+        btnRunWorkflow.disabled = false
+        btnClearWorkflow.disabled = false
+        btnOpenWorkflow.disabled = false
+        updateTabStates()
+
+        workflowPreviewProgress.classList.remove('active')
+        setStatus('ready', 'Ready')
+      }
+
+      // ---- Grid ----
+      gridToggle.addEventListener('click', async () => {
+        gridActive = !gridActive
+        gridToggle.classList.toggle('active', gridActive)
+        const size = parseInt(gridSize.value)
+        await api('toggle_grid', gridActive, size)
+      })
+
+      gridSize.addEventListener('input', async () => {
+        const size = parseInt(gridSize.value)
+        gridSizeValue.textContent = size + 'px'
+        if (gridActive) {
+          await api('toggle_grid', true, size)
+        }
+      })
+
+      // ---- Mode Toggle ----
+      function canSwitchToPlayback() {
+        return (
+          !isRecording && !isPreviewing && (!hasRecording || recordingSaved)
+        )
+      }
+
+      function updateTabStates() {
+        tabPlayback.disabled = !canSwitchToPlayback()
+        tabRecord.disabled = isPlaybackRunning || isWorkflowPreviewing
+      }
+
+      function switchMode(mode) {
+        if (mode === currentMode) return
+        if (mode === 'playback' && !canSwitchToPlayback()) return
+        if (mode === 'record' && isPlaybackRunning) return
+
+        currentMode = mode
+        tabRecord.classList.toggle('active', mode === 'record')
+        tabPlayback.classList.toggle('active', mode === 'playback')
+        recordPanel.classList.toggle('hidden', mode !== 'record')
+        playbackPanel.classList.toggle('visible', mode === 'playback')
+        document.body.classList.toggle('mode-playback', mode === 'playback')
+        document.body.classList.toggle('mode-record', mode === 'record')
+
+        if (mode === 'record') {
+          // Switching to record clears loaded workflow
+          workflowLoaded = false
+          workflowInfo.style.display = 'none'
+          playbackControls.style.display = 'none'
+          workflowPreviewSection.style.display = 'none'
+          api('clear_workflow')
+        }
+      }
+
+      tabRecord.addEventListener('click', () => switchMode('record'))
+      tabPlayback.addEventListener('click', () => switchMode('playback'))
+
+      // ---- Playback ----
+      function clearPlaybackTimers() {
+        if (playbackPromptTimer) {
+          clearTimeout(playbackPromptTimer)
+          playbackPromptTimer = null
+        }
+        if (playbackAutoTimer) {
+          clearTimeout(playbackAutoTimer)
+          playbackAutoTimer = null
+        }
+      }
+
+      function openPlaybackPrompt() {
+        if (!workflowLoaded || isPlaybackRunning || isWorkflowPreviewing) return
+        playbackOverlay.classList.add('visible')
+        updateModalState()
+        optMatchRes.checked = true
+        optMatchWindows.checked = true
+        optCompletionSound.checked = false
+        optLoopCount.value = '1'
+        optLoopCount.disabled = false
+        optLoopInfinite.checked = false
+        optLoopDelay.value = '0'
+        optLoopPing.value = ''
+        optSpeed.value = playbackSpeed.value
+        optSpeedValue.textContent = playbackSpeed.value + 'x'
+        playbackTimeoutNote.textContent =
+          'Chime at 20s. Auto-start at 35s if no response.'
+        clearPlaybackTimers()
+        playbackPromptTimer = setTimeout(async () => {
+          await api('play_chime')
+        }, 20000)
+        playbackAutoTimer = setTimeout(() => {
+          startPlaybackDefaults()
+        }, 35000)
+      }
+
+      function closePlaybackPrompt() {
+        playbackOverlay.classList.remove('visible')
+        updateModalState()
+        clearPlaybackTimers()
+      }
+
+      async function startPlayback(speed, matchRes, matchWindows, playSound,
+                                    loopCount, loopDelay, loopPingUrl) {
+        const result = await api(
+          'run_workflow',
+          speed,
+          matchRes,
+          matchWindows,
+          playSound,
+          loopCount || 1,
+          loopDelay || 0,
+          loopPingUrl || null
+        )
+        if (!result || result.status !== 'running') {
+          if (result && result.message) showToast(result.message)
+          return false
+        }
+
+        if (result.warning) {
+          showToast(result.warning)
+        }
+
+        isPlaybackRunning = true
+        btnRunWorkflow.disabled = true
+        btnStopWorkflow.disabled = false
+        btnClearWorkflow.disabled = true
+        btnOpenWorkflow.disabled = true
+        btnWorkflowPreview.disabled = true
+        updateTabStates()
+
+        playbackProgress.classList.add('active')
+        playbackProgressFill.style.width = '0%'
+        setStatus('previewing', 'Running workflow...')
+        return true
+      }
+
+      async function startPlaybackDefaults() {
+        closePlaybackPrompt()
+        optMatchRes.checked = false
+        optMatchWindows.checked = false
+        optCompletionSound.checked = false
+        optSpeed.value = '1'
+        optSpeedValue.textContent = '1x'
+        playbackSpeed.value = '1'
+        playbackSpeedValue.textContent = '1x'
+        await startPlayback(1.0, false, false, false)
+      }
+
+      btnStartPlayback.addEventListener('click', async () => {
+        closePlaybackPrompt()
+        const speed = parseFloat(optSpeed.value)
+        playbackSpeed.value = optSpeed.value
+        playbackSpeedValue.textContent = optSpeed.value + 'x'
+        const loopCount = optLoopInfinite.checked
+          ? 0
+          : parseInt(optLoopCount.value) || 1
+        const loopDelay = parseFloat(optLoopDelay.value) || 0
+        const loopPingUrl = optLoopPing.value.trim() || null
+        await startPlayback(
+          speed,
+          optMatchRes.checked,
+          optMatchWindows.checked,
+          optCompletionSound.checked,
+          loopCount,
+          loopDelay,
+          loopPingUrl
+        )
+      })
+
+      btnCancelPlayback.addEventListener('click', () => {
+        closePlaybackPrompt()
+      })
+
+      optSpeed.addEventListener('input', () => {
+        optSpeedValue.textContent = optSpeed.value + 'x'
+      })
+
+      optLoopInfinite.addEventListener('change', () => {
+        optLoopCount.disabled = optLoopInfinite.checked
+        if (optLoopInfinite.checked) {
+          optLoopCount.value = ''
+        } else {
+          optLoopCount.value = '1'
+        }
+      })
+
+      // Called from Python during looped playback
+      function updateLoopStatus(text) {
+        loopStatus.textContent = text
+        loopStatus.classList.add('active')
+      }
+
+      btnOpenWorkflow.addEventListener('click', () => {
+        openWorkflowsBrowser()
+      })
+
+      btnRunWorkflow.addEventListener('click', () => {
+        if (!permissionsReady && !permissionsBypassed) {
+          showPermissionOverlay()
+          return
+        }
+        openPlaybackPrompt()
+      })
+
+      btnStopWorkflow.addEventListener('click', async () => {
+        await api('stop_workflow')
+        onPlaybackDone()
+        showToast('Workflow stopped')
+      })
+
+      btnClearWorkflow.addEventListener('click', async () => {
+        await api('clear_workflow')
+        workflowLoaded = false
+        workflowInfo.style.display = 'none'
+        playbackControls.style.display = 'none'
+        workflowPreviewSection.style.display = 'none'
+      })
+
+      playbackSpeed.addEventListener('input', () => {
+        playbackSpeedValue.textContent = playbackSpeed.value + 'x'
+        if (playbackOverlay.classList.contains('visible')) {
+          optSpeed.value = playbackSpeed.value
+          optSpeedValue.textContent = playbackSpeed.value + 'x'
+        }
+      })
+
+      // ---- Workflow Preview ----
+      btnWorkflowPreview.addEventListener('click', async () => {
+        const speed = parseFloat(playbackSpeed.value)
+        const result = await api('start_workflow_preview', speed)
+        if (!result || result.status !== 'previewing') return
+
+        isWorkflowPreviewing = true
+        btnWorkflowPreview.disabled = true
+        btnStopWorkflowPreview.disabled = false
+        btnRunWorkflow.disabled = true
+        btnClearWorkflow.disabled = true
+        btnOpenWorkflow.disabled = true
+        updateTabStates()
+
+        workflowPreviewProgress.classList.add('active')
+        workflowPreviewProgressFill.style.width = '0%'
+        setStatus('previewing', 'Previewing...')
+      })
+
+      btnStopWorkflowPreview.addEventListener('click', async () => {
+        await api('stop_preview')
+        onWorkflowPreviewDone()
+      })
+
+      // Called from Python
+      function updatePlaybackProgress(pct, current, total) {
+        playbackProgressFill.style.width = pct + '%'
+        statusText.textContent = `Playback: ${current}/${total} (${pct}%)`
+      }
+
+      // Called from Python when workflow subprocess finishes
+      function onPlaybackComplete() {
+        onPlaybackDone()
+        showToast('Workflow complete')
+      }
+
+      function onPlaybackDone() {
+        isPlaybackRunning = false
+        btnRunWorkflow.disabled = false
+        btnStopWorkflow.disabled = true
+        btnClearWorkflow.disabled = false
+        btnOpenWorkflow.disabled = false
+        btnWorkflowPreview.disabled = false
+        updateTabStates()
+
+        playbackProgress.classList.remove('active')
+        loopStatus.classList.remove('active')
+        loopStatus.textContent = ''
+        setStatus('ready', 'Ready')
+      }
+
+      // ---- Helpers ----
+      function setStatus(state, text) {
+        statusDot.className = 'status-dot ' + state
+        statusText.textContent = text
+      }
+
+      function showEnvironment(env) {
+        envSection.style.display = 'block'
+        const res = env.resolution
+        const winCount = (env.windows || []).length
+        envInfo.innerHTML = `
+                <span>Resolution:</span> ${res[0]} x ${res[1]}<br>
+                <span>Windows:</span> ${winCount} visible<br>
+                <span>Frontmost:</span> ${env.frontmost_app}
+            `
+      }
+
+      function escapeHtml(str) {
+        const div = document.createElement('div')
+        div.textContent = str
+        return div.innerHTML
+      }
+
+      // ---- Workflows Browser ----
+      async function openWorkflowsBrowser() {
+        selectedWorkflowFilename = null
+        btnLoadSelected.disabled = true
+        workflowsOverlay.classList.add('visible')
+        updateModalState()
+        await refreshWorkflowList()
+      }
+
+      function closeWorkflowsBrowser() {
+        workflowsOverlay.classList.remove('visible')
+        updateModalState()
+        selectedWorkflowFilename = null
+      }
+
+      async function refreshWorkflowList() {
+        const result = await api('list_workflows')
+        if (!result || result.status !== 'ok') {
+          workflowList.innerHTML =
+            '<div class="workflow-list-empty">Error loading workflows</div>'
+          return
+        }
+
+        const workflows = result.workflows
+        if (workflows.length === 0) {
+          workflowList.innerHTML =
+            '<div class="workflow-list-empty">No saved workflows</div>'
+          return
+        }
+
+        workflowList.innerHTML = ''
+        for (const wf of workflows) {
+          const entry = document.createElement('div')
+          entry.className = 'workflow-entry'
+          entry.dataset.filename = wf.filename
+
+          const durationStr = wf.duration ? wf.duration.toFixed(1) + 's' : ''
+          const actionsStr = wf.actions ? wf.actions + ' actions' : ''
+          const dateStr = wf.date || ''
+
+          entry.innerHTML = `
+            <div class="workflow-entry-info">
+              <div class="workflow-entry-name">${escapeHtml(wf.name)}</div>
+              <div class="workflow-entry-meta">
+                <span>${escapeHtml(dateStr)}</span>
+                <span>${escapeHtml(actionsStr)}</span>
+                <span>${escapeHtml(durationStr)}</span>
+              </div>
+            </div>
+            <button class="workflow-entry-delete" title="Delete">&times;</button>
+          `
+
+          // Select on click
+          entry.addEventListener('click', e => {
+            if (e.target.closest('.workflow-entry-delete')) return
+            document
+              .querySelectorAll('.workflow-entry.selected')
+              .forEach(el => el.classList.remove('selected'))
+            entry.classList.add('selected')
+            selectedWorkflowFilename = wf.filename
+            btnLoadSelected.disabled = false
+          })
+
+          // Double-click to load immediately
+          entry.addEventListener('dblclick', e => {
+            if (e.target.closest('.workflow-entry-delete')) return
+            selectedWorkflowFilename = wf.filename
+            loadSelectedWorkflow()
+          })
+
+          // Delete button
+          const deleteBtn = entry.querySelector('.workflow-entry-delete')
+          deleteBtn.addEventListener('click', async e => {
+            e.stopPropagation()
+            const confirmed = confirm(
+              `Delete "${wf.name}"? This cannot be undone.`
+            )
+            if (!confirmed) return
+
+            const delResult = await api('delete_workflow', wf.filename)
+            if (delResult && delResult.status === 'deleted') {
+              showToast('Workflow deleted')
+              if (selectedWorkflowFilename === wf.filename) {
+                selectedWorkflowFilename = null
+                btnLoadSelected.disabled = true
+              }
+              await refreshWorkflowList()
+            } else {
+              showToast('Error deleting workflow')
+            }
+          })
+
+          workflowList.appendChild(entry)
+        }
+      }
+
+      async function loadSelectedWorkflow() {
+        if (!selectedWorkflowFilename) return
+
+        const result = await api(
+          'load_workflow_by_filename',
+          selectedWorkflowFilename
+        )
+        if (!result) return
+
+        if (result.status === 'ok') {
+          const m = result.metadata
+          wfName.textContent = m.name
+          wfDate.textContent = m.date
+          wfRes.textContent = m.resolution
+          wfActions.textContent = m.actions
+          wfDuration.textContent = m.duration + 's'
+          workflowInfo.style.display = 'block'
+          playbackControls.style.display = 'block'
+          workflowPreviewSection.style.display = 'block'
+          workflowLoaded = true
+          closeWorkflowsBrowser()
+          showToast('Loaded: ' + m.name)
+        } else if (result.status === 'error') {
+          showToast(result.message || 'Error loading workflow')
+        }
+      }
+
+      btnLoadSelected.addEventListener('click', loadSelectedWorkflow)
+      btnCloseWorkflows.addEventListener('click', closeWorkflowsBrowser)
+    </script>
+  </body>
+</html>
