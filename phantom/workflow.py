@@ -188,6 +188,31 @@ def _process_events(raw_events):
             dx, dy = event.get('dx', 0), event.get('dy', 0)
             processed.append((round(t, 4), 'scroll', x, y, dx, dy))
 
+        elif etype == 'magnify':
+            x, y = event['x'], event['y']
+            value = event.get('value', 0)
+            phase = event.get('phase', 0)
+            processed.append((round(t, 4), 'magnify', x, y, value, phase))
+
+        elif etype == 'rotate':
+            x, y = event['x'], event['y']
+            value = event.get('value', 0)
+            phase = event.get('phase', 0)
+            processed.append((round(t, 4), 'rotate', x, y, value, phase))
+
+        elif etype == 'swipe':
+            x, y = event['x'], event['y']
+            dx, dy = event.get('dx', 0), event.get('dy', 0)
+            processed.append((round(t, 4), 'swipe', x, y, dx, dy))
+
+        elif etype == 'smart_magnify':
+            x, y = event['x'], event['y']
+            processed.append((round(t, 4), 'smart_magnify', x, y))
+
+        elif etype == 'space_switch':
+            direction = event.get('direction', 'right')
+            processed.append((round(t, 4), 'space_switch', direction))
+
     return processed
 
 
@@ -239,11 +264,16 @@ import sys
 
 try:
     from Quartz import (
+        CGEventCreate,
         CGEventCreateMouseEvent,
         CGEventCreateKeyboardEvent,
         CGEventCreateScrollWheelEvent,
         CGEventPost,
+        CGEventSetDoubleValueField,
         CGEventSetFlags,
+        CGEventSetIntegerValueField,
+        CGEventSetLocation,
+        CGEventSetType,
         CGDisplayBounds,
         CGDisplayCopyAllDisplayModes,
         CGDisplayCopyDisplayMode,
@@ -274,6 +304,17 @@ except ImportError:
     print("Install with: pip install pyobjc-framework-Quartz")
     sys.exit(1)
 
+# Private CGEvent types for trackpad gesture replay
+_kCGEventRotate = 18
+_kCGEventMagnify = 30
+_kCGEventSwipe = 31
+_kCGEventSmartMagnify = 32
+
+# Private CGEvent field IDs (from WebKit source)
+_GESTURE_PHASE_FIELD = 132
+_GESTURE_MAGNIFY_FIELD = 113
+_GESTURE_ROTATE_FIELD = 114
+
 
 SPEED = {speed}
 
@@ -295,9 +336,13 @@ FRONTMOST_APP = {frontmost}
 
 # --- Recorded events ---
 # Format: (timestamp, event_type, ...)
-# Mouse events: (t, type, x, y)
-# Key events:   (t, type, keycode, modifier_flags)
-# Scroll events: (t, 'scroll', x, y, dx, dy)
+# Mouse events:   (t, type, x, y)
+# Key events:     (t, type, keycode, modifier_flags)
+# Scroll events:  (t, 'scroll', x, y, dx, dy)
+# Gesture events: (t, 'magnify'/'rotate', x, y, value, phase)
+#                 (t, 'swipe', x, y, dx, dy)
+#                 (t, 'smart_magnify', x, y)
+# Space events:   (t, 'space_switch', 'left'/'right')
 EVENTS = {events}
 
 
@@ -625,6 +670,46 @@ def post_scroll(x, y, dx, dy):
     CGEventPost(kCGHIDEventTap, event)
 
 
+def post_gesture(gesture_type, x, y, value=0.0, phase=0, value_field=_GESTURE_MAGNIFY_FIELD):
+    """Post a trackpad gesture event (magnify, rotate, swipe, smart magnify)."""
+    move = CGEventCreateMouseEvent(None, kCGEventMouseMoved, (x, y), kCGMouseButtonLeft)
+    CGEventPost(kCGHIDEventTap, move)
+    event = CGEventCreate(None)
+    CGEventSetType(event, gesture_type)
+    CGEventSetLocation(event, (x, y))
+    if value:
+        CGEventSetDoubleValueField(event, value_field, value)
+    if phase:
+        CGEventSetIntegerValueField(event, _GESTURE_PHASE_FIELD, phase)
+    CGEventPost(kCGHIDEventTap, event)
+
+
+def post_swipe(x, y, dx, dy):
+    """Post a trackpad swipe gesture event."""
+    move = CGEventCreateMouseEvent(None, kCGEventMouseMoved, (x, y), kCGMouseButtonLeft)
+    CGEventPost(kCGHIDEventTap, move)
+    event = CGEventCreate(None)
+    CGEventSetType(event, _kCGEventSwipe)
+    CGEventSetLocation(event, (x, y))
+    if dx:
+        CGEventSetDoubleValueField(event, 4, dx)
+    if dy:
+        CGEventSetDoubleValueField(event, 5, dy)
+    CGEventPost(kCGHIDEventTap, event)
+
+
+def post_space_switch(direction):
+    """Switch desktop space by simulating Ctrl+Arrow."""
+    keycode = 124 if direction == 'right' else 123  # right=124, left=123
+    event = CGEventCreateKeyboardEvent(None, keycode, True)
+    CGEventSetFlags(event, 0x00040000)  # kCGEventFlagMaskControl
+    CGEventPost(kCGHIDEventTap, event)
+    event = CGEventCreateKeyboardEvent(None, keycode, False)
+    CGEventSetFlags(event, 0x00040000)
+    CGEventPost(kCGHIDEventTap, event)
+    time.sleep(0.7)  # Wait for space switching animation
+
+
 def replay():
     """Replay recorded input events."""
     total = len(EVENTS)
@@ -677,6 +762,23 @@ def replay():
 
         elif event_type == 'scroll':
             post_scroll(entry[2], entry[3], entry[4], entry[5])
+
+        elif event_type == 'magnify':
+            post_gesture(_kCGEventMagnify, entry[2], entry[3],
+                         entry[4], entry[5], _GESTURE_MAGNIFY_FIELD)
+
+        elif event_type == 'rotate':
+            post_gesture(_kCGEventRotate, entry[2], entry[3],
+                         entry[4], entry[5], _GESTURE_ROTATE_FIELD)
+
+        elif event_type == 'swipe':
+            post_swipe(entry[2], entry[3], entry[4], entry[5])
+
+        elif event_type == 'smart_magnify':
+            post_gesture(_kCGEventSmartMagnify, entry[2], entry[3])
+
+        elif event_type == 'space_switch':
+            post_space_switch(entry[2])
 
         # Progress indicator
         if (i + 1) % 500 == 0 or i == total - 1:

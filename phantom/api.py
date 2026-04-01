@@ -42,6 +42,9 @@ class Api:
         }
         self._pre_prompt_frontmost_app = None
 
+        # Recording screenshot (raw JPEG bytes captured at record start)
+        self._recording_screenshot_data = None
+
         # Preview state
         self._preview_active = False
         self._preview_thread = None
@@ -111,7 +114,8 @@ class Api:
         except Exception:
             pass
 
-    def _begin_recording(self, record_resolution=True, record_windows=True):
+    def _begin_recording(self, record_resolution=True, record_windows=True,
+                         record_screenshot=False):
         """Internal shared recording start implementation."""
         if self.recorder.is_recording:
             return {'status': 'already_recording'}
@@ -127,6 +131,12 @@ class Api:
             self.environment['windows'] = []
         if self._pre_prompt_frontmost_app:
             self.environment['frontmost_app'] = self._pre_prompt_frontmost_app
+
+        # Capture a screenshot of the current screen state (only if opted in)
+        if record_screenshot:
+            self._recording_screenshot_data = _capture_screenshot_jpeg()
+        else:
+            self._recording_screenshot_data = None
 
         # Start recording
         self.recorder.start()
@@ -182,7 +192,9 @@ class Api:
                 pass
         return {'status': 'dismissed'}
 
-    def begin_recording_from_overlay(self, record_resolution=True, record_windows=True):
+    def begin_recording_from_overlay(self, record_resolution=True,
+                                     record_windows=True,
+                                     record_screenshot=False):
         """Begin recording from overlay prompt interaction."""
         if self._pre_prompt_frontmost_app:
             self._activate_application(self._pre_prompt_frontmost_app)
@@ -190,6 +202,7 @@ class Api:
         result = self._begin_recording(
             record_resolution=record_resolution,
             record_windows=record_windows,
+            record_screenshot=record_screenshot,
         )
         if result.get('status') != 'recording':
             return result
@@ -210,11 +223,13 @@ class Api:
 
         return result
 
-    def start_recording(self, record_resolution=True, record_windows=True):
+    def start_recording(self, record_resolution=True, record_windows=True,
+                        record_screenshot=False):
         """Start recording input events and capture environment."""
         result = self._begin_recording(
             record_resolution=record_resolution,
             record_windows=record_windows,
+            record_screenshot=record_screenshot,
         )
         if result.get('status') != 'recording':
             return result
@@ -370,6 +385,16 @@ class Api:
                 f.write(script)
             os.chmod(filepath, 0o755)
 
+            # Save companion screenshot if one was captured
+            if self._recording_screenshot_data:
+                screenshot_path = filepath.rsplit('.py', 1)[0] + '.jpg'
+                try:
+                    with open(screenshot_path, 'wb') as sf:
+                        sf.write(self._recording_screenshot_data)
+                except Exception:
+                    pass
+                self._recording_screenshot_data = None
+
             meta = parse_workflow_metadata(filepath)
             if meta:
                 meta['filename'] = filename
@@ -452,6 +477,13 @@ class Api:
 
         try:
             os.unlink(filepath)
+            # Remove companion screenshot if present
+            screenshot_path = filepath.rsplit('.py', 1)[0] + '.jpg'
+            if os.path.isfile(screenshot_path):
+                try:
+                    os.unlink(screenshot_path)
+                except Exception:
+                    pass
             # If the deleted workflow was loaded for playback, clear it
             if self._playback_filepath == filepath:
                 self._playback_filepath = None
@@ -668,6 +700,30 @@ class Api:
                 self._overlay_window.evaluate_js(
                     f'showScroll({event["x"]}, {event["y"]}, {event.get("dy", 0)})'
                 )
+            elif etype == 'magnify':
+                self._overlay_window.evaluate_js(
+                    f'showGesture({event["x"]}, {event["y"]}, "pinch", {event.get("value", 0)})'
+                )
+            elif etype == 'rotate':
+                self._overlay_window.evaluate_js(
+                    f'showGesture({event["x"]}, {event["y"]}, "rotate", {event.get("value", 0)})'
+                )
+            elif etype == 'swipe':
+                dx = event.get('dx', 0)
+                dy = event.get('dy', 0)
+                self._overlay_window.evaluate_js(
+                    f'showGesture({event["x"]}, {event["y"]}, "swipe", 0, {dx}, {dy})'
+                )
+            elif etype == 'smart_magnify':
+                self._overlay_window.evaluate_js(
+                    f'showGesture({event["x"]}, {event["y"]}, "zoom")'
+                )
+            elif etype == 'space_switch':
+                direction = event.get('direction', 'right')
+                safe_dir = direction.replace("'", "\\'")
+                self._overlay_window.evaluate_js(
+                    f"showSpaceSwitch('{safe_dir}')"
+                )
         except Exception:
             pass
 
@@ -767,30 +823,15 @@ class Api:
         self._loop_iteration = 1
         self._loop_cmd = cmd[:]  # Save for re-launches
 
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            # Feed input proactively for workflows that prompt:
-            # - Older templates may prompt for ENTER before replay
-            # - Current templates prompt on resolution mismatch (y/n)
-            # Sending 'y' then an extra newline covers both cases without
-            # closing stdin so additional prompts can still read if needed.
-            try:
-                proc.stdin.write('y\n\n')
-                proc.stdin.flush()
-            except OSError:
-                pass
+        # Check for a companion ghost screenshot
+        ghost_data_url = _load_ghost_screenshot(self._playback_filepath)
 
-            self._playback_process = proc
+        try:
             self._playback_active = True
             self._watchdog.start(hotkey_enabled=abort_hotkey_enabled)
             self._playback_thread = threading.Thread(
-                target=self._monitor_playback,
+                target=self._launch_and_monitor_playback,
+                args=(cmd, ghost_data_url),
                 daemon=True,
             )
             self._playback_thread.start()
@@ -799,6 +840,7 @@ class Api:
                 result['warning'] = warning
             return result
         except Exception as e:
+            self._playback_active = False
             self._cleanup_playback_temp_file()
             return {'status': 'error', 'message': str(e)}
 
@@ -834,6 +876,64 @@ class Api:
 
     def is_playback_active(self):
         return self._playback_active
+
+    def _launch_and_monitor_playback(self, cmd, ghost_data_url):
+        """Show ghost screenshot if available, then launch subprocess."""
+        # Show the ghost overlay before starting playback
+        if ghost_data_url and self._overlay_window and self._playback_active:
+            try:
+                self._overlay_window.evaluate_js(
+                    f'showGhostScreenshot("{ghost_data_url}")'
+                )
+            except Exception:
+                pass
+            # Hold the ghost for 3 seconds (check for abort each 0.1s)
+            for _ in range(30):
+                if not self._playback_active:
+                    try:
+                        self._overlay_window.evaluate_js('hideGhostScreenshot()')
+                    except Exception:
+                        pass
+                    return
+                time.sleep(0.1)
+            # Fade out
+            try:
+                self._overlay_window.evaluate_js('hideGhostScreenshot()')
+            except Exception:
+                pass
+            time.sleep(0.5)  # Wait for fade-out transition
+
+        if not self._playback_active:
+            return
+
+        # Launch the workflow subprocess
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            try:
+                proc.stdin.write('y\n\n')
+                proc.stdin.flush()
+            except OSError:
+                pass
+            self._playback_process = proc
+        except Exception as e:
+            self._playback_active = False
+            self._cleanup_playback_temp_file()
+            if self._window:
+                try:
+                    msg = str(e).replace("'", "\\'")
+                    self._window.evaluate_js(f"showToast('Playback error: {msg}')")
+                    self._window.evaluate_js('onPlaybackComplete()')
+                except Exception:
+                    pass
+            return
+
+        self._monitor_playback()
 
     def _monitor_playback(self):
         """Background thread: read subprocess stdout, handle looping."""
@@ -1075,6 +1175,66 @@ class Api:
         self.recorder.events = []
         self.environment = None
         return {'status': 'cleared'}
+
+
+def _capture_screenshot_jpeg():
+    """Capture the main display as JPEG bytes, or None on failure."""
+    try:
+        from Quartz import (
+            CGDisplayCreateImage, CGMainDisplayID, CGDisplayBounds,
+        )
+        from AppKit import (
+            NSBitmapImageRep, NSJPEGFileType,
+            NSImage, NSMakeSize, NSCompositeSourceOver, NSMakeRect,
+        )
+
+        display_id = CGMainDisplayID()
+        cg_image = CGDisplayCreateImage(display_id)
+        if cg_image is None:
+            return None
+
+        # Get effective (logical) display size for downscaling
+        bounds = CGDisplayBounds(display_id)
+        target_w = int(bounds.size.width)
+        target_h = int(bounds.size.height)
+
+        # Draw into a new NSImage at the logical resolution
+        ns_image = NSImage.alloc().initWithCGImage_size_(
+            cg_image, NSMakeSize(target_w, target_h)
+        )
+        ns_image.lockFocus()
+        ns_image.unlockFocus()
+
+        # Get bitmap data
+        tiff_data = ns_image.TIFFRepresentation()
+        bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
+
+        # Encode as JPEG at 50% quality
+        props = {5: 0.5}  # NSImageCompressionFactor = 5
+        jpeg_data = bitmap.representationUsingType_properties_(
+            NSJPEGFileType, props
+        )
+        return bytes(jpeg_data)
+    except Exception as e:
+        log.debug('Screenshot capture failed: %s', e)
+        return None
+
+
+def _load_ghost_screenshot(workflow_filepath):
+    """Load companion screenshot as a data URL, or None."""
+    if not workflow_filepath:
+        return None
+    screenshot_path = workflow_filepath.rsplit('.py', 1)[0] + '.jpg'
+    if not os.path.isfile(screenshot_path):
+        return None
+    try:
+        import base64
+        with open(screenshot_path, 'rb') as f:
+            raw = f.read()
+        b64 = base64.b64encode(raw).decode('ascii')
+        return f'data:image/jpeg;base64,{b64}'
+    except Exception:
+        return None
 
 
 def _get_workflows_dir():
@@ -1355,6 +1515,27 @@ def _workflow_tuple_to_preview_event(tup):
             'x': tup[2], 'y': tup[3],
             'dx': tup[4] if len(tup) > 4 else 0,
             'dy': tup[5] if len(tup) > 5 else 0,
+        }
+    elif etype in ('magnify', 'rotate'):
+        return {
+            'timestamp': t, 'type': etype,
+            'x': tup[2], 'y': tup[3],
+            'value': tup[4] if len(tup) > 4 else 0,
+            'phase': tup[5] if len(tup) > 5 else 0,
+        }
+    elif etype == 'swipe':
+        return {
+            'timestamp': t, 'type': 'swipe',
+            'x': tup[2], 'y': tup[3],
+            'dx': tup[4] if len(tup) > 4 else 0,
+            'dy': tup[5] if len(tup) > 5 else 0,
+        }
+    elif etype == 'smart_magnify':
+        return {'timestamp': t, 'type': 'smart_magnify', 'x': tup[2], 'y': tup[3]}
+    elif etype == 'space_switch':
+        return {
+            'timestamp': t, 'type': 'space_switch',
+            'direction': tup[2] if len(tup) > 2 else 'right',
         }
     return {'timestamp': t, 'type': etype}
 

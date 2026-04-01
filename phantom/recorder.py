@@ -19,8 +19,10 @@ try:
         CFRunLoopGetCurrent,
         CFRunLoopRunInMode,
         CFRunLoopStop,
+        CGEventGetDoubleValueField,
         CGEventGetFlags,
         CGEventGetIntegerValueField,
+        CGEventGetLocation,
         CGEventMaskBit,
         CGEventTapCreate,
         CGEventTapEnable,
@@ -37,6 +39,48 @@ try:
     _QUARTZ_AVAILABLE = True
 except Exception:
     _QUARTZ_AVAILABLE = False
+
+# Private CGEvent types for trackpad gestures (stable, used by WebKit)
+_kCGEventRotate = 18
+_kCGEventGesture = 29
+_kCGEventMagnify = 30
+_kCGEventSwipe = 31
+_kCGEventSmartMagnify = 32
+
+# Private CGEvent field IDs for gesture data (from WebKit source)
+_GESTURE_PHASE_FIELD = 132
+_GESTURE_MAGNIFY_FIELD = 113
+_GESTURE_ROTATE_FIELD = 114
+
+# Private CGS functions for desktop space tracking (used by yabai, Amethyst)
+_CGS_AVAILABLE = False
+_cgs = {}
+try:
+    import objc as _objc
+    for _fw_path in (
+        '/System/Library/PrivateFrameworks/SkyLight.framework',
+        '/System/Library/Frameworks/CoreGraphics.framework',
+    ):
+        try:
+            _cgs_bundle = _objc.loadBundle('_CGS', _cgs, bundle_path=_fw_path)
+            _objc.loadBundleFunctions(_cgs_bundle, _cgs, [
+                ('CGSMainConnectionID', b'I'),
+                ('CGSGetActiveSpace', b'QI'),
+                ('CGSCopyManagedDisplaySpaces', b'@I'),
+            ])
+            if 'CGSMainConnectionID' in _cgs:
+                _CGS_AVAILABLE = True
+                break
+        except Exception:
+            continue
+except Exception:
+    pass
+
+try:
+    from AppKit import NSWorkspace as _NSWorkspace
+    _WORKSPACE_AVAILABLE = True
+except Exception:
+    _WORKSPACE_AVAILABLE = False
 
 
 class EventRecorder:
@@ -76,6 +120,11 @@ class EventRecorder:
         # Last mouse position for UI
         self._last_mouse_x = 0
         self._last_mouse_y = 0
+
+        # Desktop space tracking
+        self._space_observer = None
+        self._current_space_id = None
+        self._space_order = []
 
     def set_exclusion_zone(self, x, y, w, h):
         """Set a screen region to exclude from recording (the control panel)."""
@@ -118,6 +167,8 @@ class EventRecorder:
         else:
             self.keyboard_backend = 'quartz'
 
+        self._start_space_tracking()
+
     def stop(self):
         """Stop recording events."""
         self.is_recording = False
@@ -128,6 +179,7 @@ class EventRecorder:
             self._keyboard_listener.stop()
             self._keyboard_listener = None
         self._stop_quartz_keyboard_capture()
+        self._stop_space_tracking()
         self.keyboard_backend = 'none'
 
     def _timestamp(self):
@@ -260,11 +312,15 @@ class EventRecorder:
         self._keyboard_loop = None
 
     def _run_quartz_keyboard_loop(self):
-        """Run the Quartz keyboard event tap loop in a background thread."""
+        """Run the Quartz keyboard + gesture event tap loop in a background thread."""
         event_mask = (
             CGEventMaskBit(kCGEventKeyDown)
             | CGEventMaskBit(kCGEventKeyUp)
             | CGEventMaskBit(kCGEventFlagsChanged)
+            | CGEventMaskBit(_kCGEventRotate)
+            | CGEventMaskBit(_kCGEventMagnify)
+            | CGEventMaskBit(_kCGEventSwipe)
+            | CGEventMaskBit(_kCGEventSmartMagnify)
         )
         tap = CGEventTapCreate(
             kCGSessionEventTap,
@@ -290,22 +346,26 @@ class EventRecorder:
         self._keyboard_loop = None
 
     def _quartz_keyboard_callback(self, _proxy, event_type, event, _refcon):
-        """Low-level Quartz keyboard callback."""
+        """Low-level Quartz keyboard and gesture callback."""
         try:
             if not self.is_recording:
                 return event
 
-            keycode = int(CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode))
-            flags = int(CGEventGetFlags(event))
+            if event_type in (kCGEventKeyDown, kCGEventKeyUp, kCGEventFlagsChanged):
+                keycode = int(CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode))
+                flags = int(CGEventGetFlags(event))
 
-            if event_type == kCGEventKeyDown:
-                self._record_keyboard_event('keydown', keycode, flags)
-            elif event_type == kCGEventKeyUp:
-                self._record_keyboard_event('keyup', keycode, flags)
-            elif event_type == kCGEventFlagsChanged:
-                self._handle_flags_changed(keycode, flags)
+                if event_type == kCGEventKeyDown:
+                    self._record_keyboard_event('keydown', keycode, flags)
+                elif event_type == kCGEventKeyUp:
+                    self._record_keyboard_event('keyup', keycode, flags)
+                elif event_type == kCGEventFlagsChanged:
+                    self._handle_flags_changed(keycode, flags)
+            elif event_type in (_kCGEventMagnify, _kCGEventRotate,
+                                _kCGEventSwipe, _kCGEventSmartMagnify):
+                self._record_gesture_event(event_type, event)
         except Exception:
-            # Never let keyboard callback exceptions break capture.
+            # Never let callback exceptions break capture.
             pass
         return event
 
@@ -366,6 +426,142 @@ class EventRecorder:
 
         self._modifier_key_state[keycode] = is_pressed
         self._keyboard_flags = flags
+
+    # --- Desktop space tracking ---
+
+    def _start_space_tracking(self):
+        """Begin monitoring desktop space changes."""
+        if not (_CGS_AVAILABLE and _WORKSPACE_AVAILABLE):
+            return
+        try:
+            conn = _cgs['CGSMainConnectionID']()
+            self._current_space_id = int(_cgs['CGSGetActiveSpace'](conn))
+            self._space_order = self._get_space_order(conn)
+
+            center = _NSWorkspace.sharedWorkspace().notificationCenter()
+            self._space_observer = (
+                center.addObserverForName_object_queue_usingBlock_(
+                    'NSWorkspaceActiveSpaceDidChangeNotification',
+                    None, None,
+                    self._on_space_changed,
+                )
+            )
+        except Exception:
+            self._space_observer = None
+
+    def _stop_space_tracking(self):
+        """Stop monitoring desktop space changes."""
+        if self._space_observer is not None:
+            try:
+                center = _NSWorkspace.sharedWorkspace().notificationCenter()
+                center.removeObserver_(self._space_observer)
+            except Exception:
+                pass
+            self._space_observer = None
+        self._current_space_id = None
+        self._space_order = []
+
+    def _get_space_order(self, conn):
+        """Get the ordered list of space IDs for the main display."""
+        try:
+            displays = _cgs['CGSCopyManagedDisplaySpaces'](conn)
+            if not displays or len(displays) == 0:
+                return []
+            spaces = displays[0].get('Spaces', [])
+            return [int(s.get('id64', 0)) for s in spaces]
+        except Exception:
+            return []
+
+    def _on_space_changed(self, notification):
+        """NSWorkspace callback for desktop space changes."""
+        if not self.is_recording:
+            return
+        try:
+            conn = _cgs['CGSMainConnectionID']()
+            new_id = int(_cgs['CGSGetActiveSpace'](conn))
+            old_id = self._current_space_id
+
+            if new_id == old_id:
+                return
+
+            # Refresh in case spaces were added/removed
+            self._space_order = self._get_space_order(conn)
+
+            direction = 'right'
+            if old_id in self._space_order and new_id in self._space_order:
+                old_idx = self._space_order.index(old_id)
+                new_idx = self._space_order.index(new_id)
+                direction = 'right' if new_idx > old_idx else 'left'
+
+            self._current_space_id = new_id
+
+            self._record({
+                'type': 'space_switch',
+                'direction': direction,
+                'timestamp': self._timestamp(),
+            })
+        except Exception:
+            pass
+
+    # --- Gesture callbacks ---
+
+    def _record_gesture_event(self, event_type, event):
+        """Record a trackpad gesture event from the Quartz tap."""
+        location = CGEventGetLocation(event)
+        x, y = int(location.x), int(location.y)
+        if self._is_excluded(x, y):
+            return
+
+        self._last_mouse_x = x
+        self._last_mouse_y = y
+        t = self._timestamp()
+
+        if event_type == _kCGEventMagnify:
+            try:
+                value = CGEventGetDoubleValueField(event, _GESTURE_MAGNIFY_FIELD)
+            except Exception:
+                value = 0.0
+            try:
+                phase = int(CGEventGetIntegerValueField(event, _GESTURE_PHASE_FIELD))
+            except Exception:
+                phase = 0
+            self._record({
+                'type': 'magnify', 'x': x, 'y': y,
+                'value': round(value, 6), 'phase': phase,
+                'timestamp': t,
+            })
+        elif event_type == _kCGEventRotate:
+            try:
+                value = CGEventGetDoubleValueField(event, _GESTURE_ROTATE_FIELD)
+            except Exception:
+                value = 0.0
+            try:
+                phase = int(CGEventGetIntegerValueField(event, _GESTURE_PHASE_FIELD))
+            except Exception:
+                phase = 0
+            self._record({
+                'type': 'rotate', 'x': x, 'y': y,
+                'value': round(value, 6), 'phase': phase,
+                'timestamp': t,
+            })
+        elif event_type == _kCGEventSwipe:
+            try:
+                from AppKit import NSEvent as _NSEvent
+                ns_ev = _NSEvent.eventWithCGEvent_(event)
+                dx = round(ns_ev.deltaX(), 6) if ns_ev else 0
+                dy = round(ns_ev.deltaY(), 6) if ns_ev else 0
+            except Exception:
+                dx = dy = 0
+            self._record({
+                'type': 'swipe', 'x': x, 'y': y,
+                'dx': dx, 'dy': dy,
+                'timestamp': t,
+            })
+        elif event_type == _kCGEventSmartMagnify:
+            self._record({
+                'type': 'smart_magnify', 'x': x, 'y': y,
+                'timestamp': t,
+            })
 
     def _on_press(self, key):
         if not self.is_recording:
