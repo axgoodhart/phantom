@@ -679,7 +679,7 @@ def replay():
             post_scroll(entry[2], entry[3], entry[4], entry[5])
 
         # Progress indicator
-        if (i + 1) % 500 == 0 or i == total - 1:
+        if (i + 1) % 50 == 0 or i == total - 1:
             pct = int((i + 1) / total * 100)
             if sys.stdout.isatty():
                 print(f"  Progress: {{pct}}% ({{i + 1}}/{{total}})", end="\\r")

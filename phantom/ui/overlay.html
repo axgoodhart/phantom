@@ -613,6 +613,41 @@
           cancelRecordPrompt()
         }
       })
+
+      // --- Playback countdown ---
+      let playbackCountdownActive = false
+
+      async function showPlaybackCountdown() {
+        playbackCountdownActive = true
+        const token = ++recordCountdownToken
+        for (const value of [3, 2, 1]) {
+          if (token !== recordCountdownToken || !playbackCountdownActive) {
+            return
+          }
+          recordCountdown.textContent = String(value)
+          recordCountdown.style.display = 'flex'
+          recordCountdown.classList.remove('show')
+          void recordCountdown.offsetWidth
+          recordCountdown.classList.add('show')
+          await sleep(1000)
+        }
+        clearRecordCountdown()
+        playbackCountdownActive = false
+        if (token !== recordCountdownToken) return
+        if (window.pywebview && window.pywebview.api) {
+          try {
+            await window.pywebview.api.begin_playback_from_overlay()
+          } catch (e) {
+            console.error('Could not start playback:', e)
+          }
+        }
+      }
+
+      function cancelPlaybackCountdown() {
+        playbackCountdownActive = false
+        recordCountdownToken++
+        clearRecordCountdown()
+      }
     </script>
   </body>
 </html>

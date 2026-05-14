@@ -1996,8 +1996,9 @@
       async function startPlayback(speed, matchRes, matchWindows, playSound,
                                     loopCount, loopDelay, loopPingUrl,
                                     abortHotkeyEnabled) {
+        // Trigger overlay countdown; overlay calls begin_playback_from_overlay when done
         const result = await api(
-          'run_workflow',
+          'show_playback_countdown',
           speed,
           matchRes,
           matchWindows,
@@ -2007,7 +2008,7 @@
           loopPingUrl || null,
           abortHotkeyEnabled !== false
         )
-        if (!result || result.status !== 'running') {
+        if (!result || (result.status !== 'countdown' && result.status !== 'running')) {
           if (result && result.message) showToast(result.message)
           return false
         }
@@ -2016,6 +2017,16 @@
           showToast(result.warning)
         }
 
+        // If countdown started, the overlay will call back when done.
+        // If no overlay, run_workflow was called directly and status is 'running'.
+        if (result.status === 'running') {
+          onPlaybackActuallyStarted()
+        }
+        // 'countdown' — wait for onPlaybackActuallyStarted() from the callback
+        return true
+      }
+
+      function onPlaybackActuallyStarted() {
         isPlaybackRunning = true
         btnRunWorkflow.disabled = true
         btnStopWorkflow.disabled = false
@@ -2029,7 +2040,6 @@
         setStatus('previewing', 'Running workflow...')
 
         enterMiniMode()
-        return true
       }
 
       async function startPlaybackDefaults() {

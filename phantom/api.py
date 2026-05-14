@@ -42,12 +42,16 @@ class Api:
         }
         self._pre_prompt_frontmost_app = None
 
+        # Pending playback options (set before overlay countdown, used after)
+        self._pending_playback_opts = None
+
         # Preview state
         self._preview_active = False
         self._preview_thread = None
 
         # Playback state
         self._playback_process = None
+        self._playback_guardian = None
         self._playback_thread = None
         self._playback_active = False
         self._playback_metadata = None
@@ -683,6 +687,52 @@ class Api:
             except Exception:
                 pass
 
+    def show_playback_countdown(self, speed=1.0, match_resolution=True,
+                                match_windows=True, play_completion_sound=False,
+                                loop_count=1, loop_delay=0, loop_ping_url=None,
+                                abort_hotkey_enabled=True):
+        """Stash playback options and trigger a countdown on the overlay."""
+        self._pending_playback_opts = {
+            'speed': speed,
+            'match_resolution': match_resolution,
+            'match_windows': match_windows,
+            'play_completion_sound': play_completion_sound,
+            'loop_count': loop_count,
+            'loop_delay': loop_delay,
+            'loop_ping_url': loop_ping_url,
+            'abort_hotkey_enabled': abort_hotkey_enabled,
+        }
+        if self._overlay_window:
+            try:
+                self._overlay_window.evaluate_js('showPlaybackCountdown()')
+                return {'status': 'countdown'}
+            except Exception as e:
+                return {'status': 'error', 'message': str(e)}
+        # No overlay — fall through to start immediately
+        return self.begin_playback_from_overlay()
+
+    def begin_playback_from_overlay(self):
+        """Called by the overlay after the playback countdown finishes."""
+        opts = self._pending_playback_opts or {}
+        self._pending_playback_opts = None
+        result = self.run_workflow(**opts)
+        if result.get('status') == 'running' and self._window:
+            try:
+                self._window.evaluate_js('onPlaybackActuallyStarted()')
+            except Exception:
+                pass
+        return result
+
+    def cancel_playback_countdown(self):
+        """Cancel a running playback countdown."""
+        self._pending_playback_opts = None
+        if self._overlay_window:
+            try:
+                self._overlay_window.evaluate_js('cancelPlaybackCountdown()')
+            except Exception:
+                pass
+        return {'status': 'cancelled'}
+
     def run_workflow(self, speed=1.0, match_resolution=True, match_windows=True,
                      play_completion_sound=False, loop_count=1, loop_delay=0,
                      loop_ping_url=None, abort_hotkey_enabled=True):
@@ -694,7 +744,7 @@ class Api:
 
         filepath = self._playback_filepath
         run_filepath = filepath
-        cmd = [sys.executable, run_filepath, '--speed', str(speed), '--no-prompt']
+        cmd = [sys.executable, '-u', run_filepath, '--speed', str(speed), '--no-prompt']
 
         warning = None
         supports_skip_resolution = _workflow_supports_flag(filepath, '--skip-resolution')
@@ -788,6 +838,7 @@ class Api:
 
             self._playback_process = proc
             self._playback_active = True
+            self._playback_guardian = _spawn_guardian(proc.pid)
             self._watchdog.start(hotkey_enabled=abort_hotkey_enabled)
             self._playback_thread = threading.Thread(
                 target=self._monitor_playback,
@@ -810,6 +861,8 @@ class Api:
         self._playback_play_sound = False
         self._playback_active = False  # Signal loop to stop
         self._watchdog.stop()
+        _kill_guardian(self._playback_guardian)
+        self._playback_guardian = None
 
         proc = self._playback_process
         try:
@@ -862,7 +915,7 @@ class Api:
 
             # Read stdout progress from this run
             try:
-                for line in proc.stdout:
+                for line in iter(proc.stdout.readline, ''):
                     if not self._playback_active:
                         break
                     line = line.rstrip('\n\r')
@@ -1494,3 +1547,53 @@ def _trigger_automation_probe():
         return True
     except Exception:
         return False
+
+
+def _spawn_guardian(child_pid):
+    """Spawn a tiny process that kills *child_pid* if this app dies.
+
+    Polls every 2 s.  Exits when the child is already dead (nothing to
+    guard) or when the parent disappears (kills the orphan first).
+    """
+    parent_pid = os.getpid()
+    script = (
+        "import os, signal, time, sys\n"
+        f"parent, child = {parent_pid}, {child_pid}\n"
+        "while True:\n"
+        "    time.sleep(2)\n"
+        "    try:\n"
+        "        os.kill(child, 0)\n"
+        "    except OSError:\n"
+        "        sys.exit(0)\n"
+        "    try:\n"
+        "        os.kill(parent, 0)\n"
+        "    except OSError:\n"
+        "        try:\n"
+        "            os.kill(child, signal.SIGTERM)\n"
+        "        except OSError:\n"
+        "            pass\n"
+        "        sys.exit(0)\n"
+    )
+    try:
+        return subprocess.Popen(
+            [sys.executable, '-c', script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+
+
+def _kill_guardian(proc):
+    """Terminate a guardian process if it's still running."""
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=2)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass

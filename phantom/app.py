@@ -5,6 +5,7 @@ Creates the pywebview windows (control panel + transparent overlay)
 and starts the application event loop.
 """
 
+import atexit
 import os
 import threading
 import webview
@@ -157,7 +158,12 @@ def main():
     def on_panel_loaded():
         setup_overlay(api, overlay)
 
+    def on_panel_closing():
+        api.stop_workflow()
+
     panel.events.loaded += on_panel_loaded
+    panel.events.closing += on_panel_closing
+    atexit.register(api.stop_workflow)
 
     # Start the application
     # On macOS, pywebview uses the cocoa backend by default
