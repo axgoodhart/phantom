@@ -9,7 +9,7 @@ import os
 import threading
 import webview
 
-from .api import Api, _check_accessibility
+from .api import Api
 
 
 def get_ui_path(filename):
@@ -98,8 +98,9 @@ def main():
     # Must run on main thread before any pynput keyboard listener starts
     _patch_pynput_keyboard_context()
 
-    # Check for accessibility permissions on startup
-    _check_accessibility(prompt=True)
+    # Permission prompting is handled by the UI's permission modal, which
+    # sequences the Accessibility and Automation dialogs instead of firing
+    # both system prompts at once on startup.
 
     api = Api()
 

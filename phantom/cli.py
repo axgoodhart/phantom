@@ -168,6 +168,26 @@ def _get_python_executable():
     return sys.executable
 
 
+def _env_for_python(python_exe):
+    """Build the environment for launching a Python subprocess.
+
+    The bundled Contents/MacOS/python helper resolves its stdlib against the
+    build machine's Python framework unless PYTHONHOME/PYTHONPATH point at the
+    bundle's Resources directory (the app stub sets these itself; a terminal
+    invocation does not).
+    """
+    env = os.environ.copy()
+    marker = os.path.join('Contents', 'MacOS', 'python')
+    if python_exe.endswith(marker):
+        resources = os.path.join(
+            python_exe[: -len(marker)], 'Contents', 'Resources'
+        )
+        if os.path.isdir(resources):
+            env['PYTHONHOME'] = resources
+            env['PYTHONPATH'] = resources
+    return env
+
+
 def _find_app_bundle():
     """Find the Phantom.app bundle path, or None."""
     for app_path in [
@@ -198,16 +218,15 @@ def cmd_list():
             if meta is None:
                 continue
             meta['filename'] = filename
+            try:
+                meta['mtime'] = os.path.getmtime(filepath)
+            except OSError:
+                meta['mtime'] = 0
             workflows.append(meta)
     except OSError as e:
         return {'status': 'error', 'message': str(e)}
 
-    workflows.sort(
-        key=lambda w: os.path.getmtime(
-            os.path.join(WORKFLOWS_DIR, w['filename'])
-        ),
-        reverse=True,
-    )
+    workflows.sort(key=lambda w: w['mtime'], reverse=True)
     return {'status': 'ok', 'count': len(workflows), 'workflows': workflows}
 
 
@@ -253,6 +272,7 @@ def cmd_run(identifier, speed=1.0, loop=1, loop_delay=0,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
+        env=_env_for_python(python_exe),
     )
 
     workflow_name = meta.get('name', filename) if meta else filename
@@ -490,9 +510,12 @@ def cmd_rename(identifier, new_name):
         with open(filepath, 'r') as f:
             content = f.read()
 
+        safe_name = re.sub(r'[\r\n\t]+', ' ', str(new_name)).strip()
+        # Function replacement: avoids re.sub interpreting backslashes
+        # or group references in the user-supplied name.
         new_content = re.sub(
             r'^(Workflow:\s*)(.+)$',
-            rf'\g<1>{new_name}',
+            lambda m: m.group(1) + safe_name,
             content,
             count=1,
             flags=re.MULTILINE,

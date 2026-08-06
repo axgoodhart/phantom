@@ -17,7 +17,7 @@ import tempfile
 
 log = logging.getLogger('Phantom')
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.DEBUG if os.environ.get('PHANTOM_DEBUG') else logging.INFO,
     format='[%(levelname)s] %(name)s: %(message)s',
 )
 
@@ -124,6 +124,10 @@ class Api:
         if self._pre_prompt_frontmost_app:
             self.environment['frontmost_app'] = self._pre_prompt_frontmost_app
 
+        # Exclude the control panel's screen region so clicks on Phantom's own
+        # buttons (especially Stop) don't end up in the workflow.
+        self._apply_panel_exclusion_zone()
+
         # Start recording
         self.recorder.start()
 
@@ -135,6 +139,24 @@ class Api:
             'record_options': self._record_options,
             'keyboard_backend': self.recorder.keyboard_backend,
         }
+
+    def _apply_panel_exclusion_zone(self):
+        """Set the recorder's exclusion rect to the control panel's bounds."""
+        try:
+            win = self._window
+            if win is None:
+                return
+            x, y = int(win.x), int(win.y)
+            w, h = int(win.width), int(win.height)
+            margin = 8  # Small buffer around the panel edges
+            self.recorder.set_exclusion_zone(
+                x - margin, y - margin, w + 2 * margin, h + 2 * margin
+            )
+        except Exception:
+            # Best-effort; recording proceeds without exclusion.
+            log.warning('Could not determine panel bounds for exclusion zone',
+                        exc_info=True)
+            self.recorder.clear_exclusion_zone()
 
     def show_recording_prompt(self):
         """Show the pre-record options prompt on the full-screen overlay."""
@@ -230,6 +252,7 @@ class Api:
             return {'status': 'not_recording'}
 
         self.recorder.stop()
+        self.recorder.clear_exclusion_zone()
 
         # Hide overlay cursor
         if self._overlay_window:
@@ -284,10 +307,18 @@ class Api:
     # --- Permissions ---
 
     def get_permissions_status(self):
-        """Return current permission status."""
+        """Return current permission status.
+
+        The automation check is only performed once Accessibility is granted:
+        probing automation sends a real Apple Event, which triggers the system
+        consent dialog. Sequencing the two avoids stacking multiple permission
+        dialogs at first launch.
+        """
+        accessibility = _check_accessibility(prompt=False)
+        automation = _check_automation(prompt=False) if accessibility else False
         return {
-            'accessibility': _check_accessibility(prompt=False),
-            'automation': _check_automation(prompt=False),
+            'accessibility': accessibility,
+            'automation': automation,
         }
 
     def request_permissions(self):
@@ -396,17 +427,18 @@ class Api:
                 if meta is None:
                     continue
                 meta['filename'] = filename
+                # Capture mtime now so a file deleted mid-listing can't
+                # break the sort below.
+                try:
+                    meta['mtime'] = os.path.getmtime(filepath)
+                except OSError:
+                    meta['mtime'] = 0
                 workflows.append(meta)
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
 
         # Sort newest first by file modification time
-        workflows.sort(
-            key=lambda w: os.path.getmtime(
-                os.path.join(workflows_dir, w['filename'])
-            ),
-            reverse=True,
-        )
+        workflows.sort(key=lambda w: w['mtime'], reverse=True)
         return {'status': 'ok', 'workflows': workflows}
 
     def load_workflow_by_filename(self, filename):
@@ -474,9 +506,12 @@ class Api:
             with open(filepath, 'r') as f:
                 content = f.read()
 
+            safe_name = re.sub(r'[\r\n\t]+', ' ', str(new_name)).strip()
+            # Function replacement: avoids re.sub interpreting backslashes
+            # or group references in the user-supplied name.
             new_content = re.sub(
                 r'^(Workflow:\s*)(.+)$',
-                rf'\g<1>{new_name}',
+                lambda m: m.group(1) + safe_name,
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -821,8 +856,11 @@ class Api:
 
     def _monitor_playback(self):
         """Background thread: read subprocess stdout, handle looping."""
+        from collections import deque
+
         progress_re = re.compile(r'Progress:\s*(\d+)%\s*\((\d+)/(\d+)\)')
         total_loops = self._loop_count  # 0 = infinite
+        error_message = None
 
         while self._playback_active:
             iteration = self._loop_iteration
@@ -844,12 +882,16 @@ class Api:
 
             proc = self._playback_process
 
-            # Read stdout progress from this run
+            # Read stdout progress from this run, keeping a tail of output
+            # so failures can be reported to the user.
+            output_tail = deque(maxlen=15)
             try:
                 for line in proc.stdout:
                     if not self._playback_active:
                         break
                     line = line.rstrip('\n\r')
+                    if line.strip():
+                        output_tail.append(line.strip())
                     m = progress_re.search(line)
                     if m and self._window:
                         pct, current, total = m.group(1), m.group(2), m.group(3)
@@ -869,6 +911,13 @@ class Api:
                 pass
 
             if not self._playback_active:
+                break
+
+            # Surface workflow failures instead of reporting success.
+            rc = proc.returncode
+            if rc is not None and rc != 0:
+                detail = '; '.join(list(output_tail)[-3:]) or f'exit code {rc}'
+                error_message = detail
                 break
 
             # Check if we should loop again
@@ -938,12 +987,17 @@ class Api:
         play_sound = self._playback_play_sound
         self._playback_play_sound = False
 
-        if play_sound:
+        if play_sound and not error_message:
             _play_chime()
 
         if self._window:
             try:
-                self._window.evaluate_js('onPlaybackComplete()')
+                if error_message:
+                    self._window.evaluate_js(
+                        f'onPlaybackError({json.dumps(error_message)})'
+                    )
+                else:
+                    self._window.evaluate_js('onPlaybackComplete()')
             except Exception:
                 pass
 
@@ -1004,6 +1058,28 @@ class Api:
         self.recorder.events = []
         self.environment = None
         return {'status': 'cleared'}
+
+    def quit_app(self):
+        """Stop all activity and close the application."""
+        try:
+            if self.recorder.is_recording:
+                self.recorder.stop()
+        except Exception:
+            pass
+        self._preview_active = False
+        try:
+            if self._playback_active:
+                self.stop_workflow()
+        except Exception:
+            pass
+
+        import webview
+        for window in list(webview.windows):
+            try:
+                window.destroy()
+            except Exception:
+                pass
+        return {'status': 'quitting'}
 
 
 def _get_workflows_dir():

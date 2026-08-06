@@ -72,6 +72,7 @@ def generate_workflow(events, environment, name=None, speed=1.0,
     """
     if not name:
         name = datetime.now().strftime('Recording_%Y%m%d_%H%M%S')
+    name = _sanitize_name(name)
 
     processed = _process_events(events)
     duration = events[-1]['timestamp'] if events else 0
@@ -90,6 +91,7 @@ def generate_workflow(events, environment, name=None, speed=1.0,
 
     script = _TEMPLATE.format(
         name=name,
+        name_repr=repr(name),
         timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         width=resolution[0],
         height=resolution[1],
@@ -104,6 +106,21 @@ def generate_workflow(events, environment, name=None, speed=1.0,
     )
 
     return script
+
+
+def _sanitize_name(name):
+    """Make a workflow name safe to embed in the generated script's docstring.
+
+    The name also lands in the script as a repr()'d constant, which is safe
+    for any content — but the docstring cannot contain newlines (breaks the
+    metadata header), triple quotes (terminates the docstring), or a trailing
+    backslash (escapes the line ending).
+    """
+    name = str(name)
+    name = re.sub(r'[\r\n\t]+', ' ', name).strip()
+    name = name.replace('"""', '"')
+    name = name.rstrip('\\').strip()
+    return name or 'workflow'
 
 
 def _process_events(raw_events):
@@ -275,6 +292,7 @@ except ImportError:
     sys.exit(1)
 
 
+WORKFLOW_NAME = {name_repr}
 SPEED = {speed}
 
 # --- Prompt control ---
@@ -283,6 +301,10 @@ SPEED = {speed}
 FORCE = False
 NON_INTERACTIVE = False
 DEBUG = False
+
+# Original display mode stashed if setup switches resolution, so it can be
+# restored after replay.
+_ORIGINAL_DISPLAY_MODE = None
 
 # --- Environment options ---
 SKIP_RESOLUTION = {default_skip_resolution}
@@ -391,6 +413,42 @@ def _pick_best_display_mode(display_id, target):
     return ranked[0]
 
 
+def _stash_original_mode():
+    """Remember the current display mode before any resolution switch."""
+    global _ORIGINAL_DISPLAY_MODE
+    if _ORIGINAL_DISPLAY_MODE is None:
+        try:
+            _ORIGINAL_DISPLAY_MODE = CGDisplayCopyDisplayMode(CGMainDisplayID())
+        except Exception:
+            _ORIGINAL_DISPLAY_MODE = None
+
+
+def restore_resolution():
+    """Switch back to the display mode that was active before setup."""
+    if _ORIGINAL_DISPLAY_MODE is None:
+        return
+    try:
+        original = (
+            int(CGDisplayModeGetWidth(_ORIGINAL_DISPLAY_MODE)),
+            int(CGDisplayModeGetHeight(_ORIGINAL_DISPLAY_MODE)),
+        )
+        if _current_resolution() == original:
+            return  # Nothing was actually changed.
+    except Exception:
+        pass
+    try:
+        err = CGDisplaySetDisplayMode(
+            CGMainDisplayID(), _ORIGINAL_DISPLAY_MODE, None
+        )
+        if err == 0:
+            after = _current_resolution()
+            print(f"Restored original resolution ({{after[0]}}x{{after[1]}}).")
+        else:
+            print(f"Warning: could not restore original resolution (code {{err}}).")
+    except Exception as e:
+        print(f"Warning: could not restore original resolution: {{e}}")
+
+
 def _try_set_resolution_coregraphics():
     """Try to set resolution using CoreGraphics display modes."""
     display_id = CGMainDisplayID()
@@ -398,6 +456,7 @@ def _try_set_resolution_coregraphics():
     if selected is None:
         print("  No CoreGraphics display mode matches the recorded resolution.")
         return False
+    _stash_original_mode()
 
     _, _, mode, logical, pixel, hz, is_hidpi = selected
     mode_desc = (
@@ -438,6 +497,7 @@ def _try_set_resolution_displayplacer():
         return False
 
     print("  Attempting fallback resolution switch via displayplacer...")
+    _stash_original_mode()
     try:
         list_result = subprocess.run(
             [dp, 'list'], capture_output=True, text=True, timeout=10
@@ -563,7 +623,8 @@ end tell
 
 def activate_frontmost():
     """Activate the app that was frontmost during recording."""
-    script = f'tell application "{{FRONTMOST_APP}}" to activate'
+    safe_app = FRONTMOST_APP.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"')
+    script = f'tell application "{{safe_app}}" to activate'
     _, ok = run_applescript(script)
     if not ok:
         print(f"  Could not activate {{FRONTMOST_APP}}")
@@ -614,16 +675,17 @@ def replay():
     total = len(EVENTS)
     print(f"Replaying {{total}} events (speed: {{SPEED}}x)...")
 
-    last_t = 0
+    # Schedule against an absolute clock so per-event processing overhead
+    # does not accumulate into timing drift over long recordings.
+    start = time.perf_counter()
     for i, entry in enumerate(EVENTS):
         t = entry[0]
         event_type = entry[1]
 
         # Timing
-        delay = (t - last_t) / SPEED
+        delay = (start + t / SPEED) - time.perf_counter()
         if delay > 0.0005:
             time.sleep(delay)
-        last_t = t
 
         # Dispatch
         if event_type == 'move':
@@ -710,16 +772,20 @@ if __name__ == "__main__":
         SKIP_WINDOWS = False
 
     print("=" * 50)
-    print(f"  Workflow: {name}")
+    print(f"  Workflow: {{WORKFLOW_NAME}}")
     print(f"  Actions:  {{len(EVENTS)}}")
     print(f"  Speed:    {{SPEED}}x")
     print("=" * 50 + "\\n")
 
-    if not args.skip_setup:
-        setup()
+    try:
+        if not args.skip_setup:
+            setup()
 
-    if not args.no_prompt:
-        input("Press ENTER to begin replay...")
-        print()
-    replay()
+        if not args.no_prompt:
+            input("Press ENTER to begin replay...")
+            print()
+        replay()
+    finally:
+        # If setup switched the display resolution, put it back.
+        restore_resolution()
 '''

@@ -267,6 +267,13 @@
         color: #ff6b7a;
       }
 
+      .record-prompt-privacy {
+        margin-top: 8px;
+        font-size: 10px;
+        line-height: 1.5;
+        color: #c9a24b;
+      }
+
       .record-prompt-actions {
         display: flex;
         justify-content: flex-end;
@@ -325,6 +332,11 @@
           <input type="checkbox" id="recordOptWindows" checked />
           <span>Record window arrangement</span>
         </label>
+        <div class="record-prompt-privacy">
+          &#9888; Keystrokes are captured and saved as plain text in the
+          workflow file. Avoid typing passwords or other secrets while
+          recording.
+        </div>
         <div class="record-prompt-note" id="recordPromptMessage">
           Press SPACE or click BEGIN to commence recording.
         </div>

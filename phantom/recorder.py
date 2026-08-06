@@ -96,7 +96,8 @@ class EventRecorder:
         with self._lock:
             self._pending = []
         self.is_recording = True
-        self.start_time = time.time()
+        # Monotonic clock: immune to NTP/wall-clock adjustments mid-recording.
+        self.start_time = time.monotonic()
         self._left_down = False
         self._right_down = False
         self._modifiers = {k: False for k in self._modifiers}
@@ -131,7 +132,7 @@ class EventRecorder:
         self.keyboard_backend = 'none'
 
     def _timestamp(self):
-        return time.time() - self.start_time
+        return time.monotonic() - self.start_time
 
     def _modifier_flags(self):
         flags = 0

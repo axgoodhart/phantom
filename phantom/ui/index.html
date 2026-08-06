@@ -58,11 +58,37 @@
       }
 
       .header {
+        position: relative;
         text-align: center;
         padding: 16px 16px 12px;
         border-bottom: 1px solid #222;
         background: black;
         -webkit-app-region: drag !important;
+      }
+
+      .quit-btn {
+        position: absolute;
+        top: 6px;
+        right: 8px;
+        width: 22px;
+        height: 22px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        color: #555;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        font-family: inherit;
+        -webkit-app-region: no-drag;
+      }
+
+      .quit-btn:hover {
+        color: #ff3344;
+        border-color: #ff3344;
       }
 
 .header h1 {
@@ -943,6 +969,7 @@
   <body>
     <div class="top-bar">
       <div class="header pywebview-drag-region">
+        <button class="quit-btn" id="btnQuit" title="Quit Phantom">&#10005;</button>
         <h1>PHANTOM</h1>
         <div class="subtitle">macOS Input Recording & Replay</div>
       </div>
@@ -1239,7 +1266,7 @@
           <button class="btn" id="btnCancelPlayback">Cancel</button>
         </div>
         <div class="modal-note" id="playbackTimeoutNote">
-          Chime at 20s. Auto-start at 35s if no response.
+          Chime at 20s. Auto-cancel at 35s if no response.
         </div>
       </div>
     </div>
@@ -1852,13 +1879,14 @@
         optSpeed.value = playbackSpeed.value
         optSpeedValue.textContent = playbackSpeed.value + 'x'
         playbackTimeoutNote.textContent =
-          'Chime at 20s. Auto-start at 35s if no response.'
+          'Chime at 20s. Auto-cancel at 35s if no response.'
         clearPlaybackTimers()
         playbackPromptTimer = setTimeout(async () => {
           await api('play_chime')
         }, 20000)
         playbackAutoTimer = setTimeout(() => {
-          startPlaybackDefaults()
+          closePlaybackPrompt()
+          showToast('Playback request timed out')
         }, 35000)
       }
 
@@ -1901,18 +1929,6 @@
         playbackProgressFill.style.width = '0%'
         setStatus('previewing', 'Running workflow...')
         return true
-      }
-
-      async function startPlaybackDefaults() {
-        closePlaybackPrompt()
-        optMatchRes.checked = false
-        optMatchWindows.checked = false
-        optCompletionSound.checked = false
-        optSpeed.value = '1'
-        optSpeedValue.textContent = '1x'
-        playbackSpeed.value = '1'
-        playbackSpeedValue.textContent = '1x'
-        await startPlayback(1.0, false, false, false)
       }
 
       btnStartPlayback.addEventListener('click', async () => {
@@ -2029,6 +2045,14 @@
         showToast('Workflow complete')
       }
 
+      // Called from Python when the workflow subprocess fails
+      function onPlaybackError(message) {
+        onPlaybackDone()
+        setStatus('ready', 'Workflow failed')
+        showToast('Workflow failed: ' + (message || 'unknown error'))
+        console.error('Workflow failed:', message)
+      }
+
       function onPlaybackDone() {
         isPlaybackRunning = false
         btnRunWorkflow.disabled = false
@@ -2054,11 +2078,22 @@
         envSection.style.display = 'block'
         const res = env.resolution
         const winCount = (env.windows || []).length
-        envInfo.innerHTML = `
+        let html = `
                 <span>Resolution:</span> ${res[0]} x ${res[1]}<br>
                 <span>Windows:</span> ${winCount} visible<br>
-                <span>Frontmost:</span> ${env.frontmost_app}
+                <span>Frontmost:</span> ${escapeHtml(env.frontmost_app || '')}
             `
+        if (env.display_count > 1) {
+          html +=
+            '<br><span style="color:#ffaa44">&#9888; Multiple displays: ' +
+            'overlay and resolution matching cover the main display only</span>'
+        }
+        if (winCount > 0 && env.window_names_available === false) {
+          html +=
+            '<br><span style="color:#ffaa44">&#9888; Window titles unavailable ' +
+            '(grant Screen Recording for precise window matching)</span>'
+        }
+        envInfo.innerHTML = html
       }
 
       function escapeHtml(str) {
@@ -2192,6 +2227,19 @@
 
       btnLoadSelected.addEventListener('click', loadSelectedWorkflow)
       btnCloseWorkflows.addEventListener('click', closeWorkflowsBrowser)
+
+      // ---- Quit ----
+      document.getElementById('btnQuit').addEventListener('click', async () => {
+        if (isRecording || isPlaybackRunning) {
+          const ok = confirm(
+            isRecording
+              ? 'Recording is in progress. Quit anyway?'
+              : 'A workflow is running. Quit anyway?'
+          )
+          if (!ok) return
+        }
+        await api('quit_app')
+      })
     </script>
   </body>
 </html>

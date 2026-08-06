@@ -14,11 +14,28 @@ def capture_environment():
     Returns:
         dict with keys: resolution, windows, frontmost_app
     """
+    windows = get_windows()
     return {
         'resolution': get_resolution(),
-        'windows': get_windows(),
+        'windows': windows,
         'frontmost_app': get_frontmost_app(),
+        'display_count': get_display_count(),
+        # Without Screen Recording permission, macOS redacts other apps'
+        # window titles; restore then falls back to positioning "window 1".
+        'window_names_available': (
+            not windows or any(w.get('name') not in (None, '', 'Untitled')
+                               for w in windows)
+        ),
     }
+
+
+def get_display_count():
+    """Return the number of active displays (best effort, defaults to 1)."""
+    try:
+        from AppKit import NSScreen
+        return max(1, len(NSScreen.screens()))
+    except Exception:
+        return 1
 
 
 def get_resolution():
