@@ -994,9 +994,57 @@ body {
 #recording-top, #workflow-top {
   padding-top: 44px;
 }
+
+/* ---- Recording Chip ---- */
+#recChip {
+  display: none;
+}
+
+body.chip-mode {
+  opacity: 0.75 !important;
+  border-width: 2px;
+  overflow: hidden;
+}
+
+body.chip-mode > *:not(#recChip) {
+  display: none !important;
+}
+
+body.chip-mode #recChip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  white-space: nowrap;
+}
+
+#recChip .chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff3344;
+  animation: pulse 1.2s infinite;
+  flex-shrink: 0;
+}
+
+#recChip .chip-count {
+  color: #e0e0e0;
+  font-size: 12px;
+}
+
+#recChip .chip-hint {
+  margin-left: auto;
+  color: #888;
+  font-size: 11px;
+}
     </style>
   </head>
   <body>
+    <div id="recChip">
+      <div class="chip-dot"></div>
+      <span class="chip-count" id="chipCount">0 events</span>
+      <span class="chip-hint">&#8963;&#8997;&#8984;&#9099; stop</span>
+    </div>
     <div class="top-bar">
       <div class="header pywebview-drag-region">
         <button class="quit-btn" id="btnQuit" title="Quit Phantom">&#10005;</button>
@@ -1624,9 +1672,8 @@ body {
         }
       }
 
-      btnStop.addEventListener('click', async () => {
-        const result = await api('stop_recording')
-        if (!result) return
+      async function finishRecordingUI(result) {
+        if (!result || result.status !== 'stopped') return
 
         isRecording = false
         hasRecording = result.event_count > 0
@@ -1651,7 +1698,27 @@ body {
         exportSpeed.disabled = !hasRecording
         previewSpeed.disabled = !hasRecording
         updateTabStates()
+      }
+
+      btnStop.addEventListener('click', async () => {
+        const result = await api('stop_recording')
+        if (!result) return
+        await finishRecordingUI(result)
       })
+
+      // Called from Python when recording is stopped via the ⌃⌥⌘⎋ hotkey.
+      function onRecordingStoppedByHotkey(result) {
+        finishRecordingUI(result)
+      }
+
+      // ---- Recording Chip (called from Python) ----
+      function enterChipMode() {
+        document.body.classList.add('chip-mode')
+      }
+
+      function exitChipMode() {
+        document.body.classList.remove('chip-mode')
+      }
 
       btnClear.addEventListener('click', async () => {
         await api('clear_recording')
@@ -1696,6 +1763,8 @@ body {
         // Update status count
         statusCount.textContent = eventCount + ' events'
         statusCount.style.display = 'inline'
+        document.getElementById('chipCount').textContent =
+          eventCount + ' events'
 
         // Remove empty placeholder
         const empty = eventLog.querySelector('.event-log-empty')
@@ -2258,7 +2327,7 @@ body {
       btnCloseWorkflows.addEventListener('click', closeWorkflowsBrowser)
 
       // ---- Quit ----
-      document.getElementById('btnQuit').addEventListener('click', async () => {
+      document.getElementById('btnQuit').addEventListener('click', () => {
         if (isRecording || isPlaybackRunning) {
           const ok = confirm(
             isRecording
@@ -2267,7 +2336,41 @@ body {
           )
           if (!ok) return
         }
-        await api('quit_app')
+        // Fire and forget: shutdown tears down this window, so awaiting
+        // the bridge response would hang.
+        api('quit_app')
+        setStatus('ready', 'Quitting...')
+      })
+
+      // ---- Text zoom (Cmd +/- and Cmd 0) ----
+      let uiScale = 1
+      try {
+        uiScale = parseFloat(localStorage.getItem('phantom-ui-scale')) || 1
+      } catch (e) {}
+
+      function applyUiScale() {
+        document.body.style.zoom = uiScale
+      }
+      applyUiScale()
+
+      window.addEventListener('keydown', e => {
+        if (!e.metaKey || e.altKey || e.shiftKey) return
+        if (e.key === '=' || e.key === '+') {
+          uiScale = Math.min(1.6, uiScale + 0.1)
+        } else if (e.key === '-') {
+          uiScale = Math.max(0.7, uiScale - 0.1)
+        } else if (e.key === '0') {
+          uiScale = 1
+        } else {
+          return
+        }
+        e.preventDefault()
+        uiScale = Math.round(uiScale * 10) / 10
+        try {
+          localStorage.setItem('phantom-ui-scale', String(uiScale))
+        } catch (err) {}
+        applyUiScale()
+        showToast('Text size: ' + Math.round(uiScale * 100) + '%')
       })
     </script>
   </body>

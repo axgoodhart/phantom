@@ -39,6 +39,12 @@ except Exception:
     _QUARTZ_AVAILABLE = False
 
 
+# Virtual keycodes for modifier keys (both left/right variants).
+_MODIFIER_KEYCODES = {0x37, 0x36, 0x38, 0x3C, 0x3B, 0x3E, 0x3A, 0x3D}
+
+_ESCAPE_KEYCODE = 0x35
+
+
 class EventRecorder:
     """Records global input events using pynput."""
 
@@ -46,6 +52,10 @@ class EventRecorder:
         self.events = []
         self.is_recording = False
         self.start_time = 0
+
+        # Called (on a fresh thread) when the stop hotkey ⌃⌥⌘⎋ is pressed
+        # during recording. The hotkey itself is never recorded.
+        self.on_stop_hotkey = None
 
         # Thread-safe pending events for UI polling
         self._pending = []
@@ -130,6 +140,37 @@ class EventRecorder:
             self._keyboard_listener = None
         self._stop_quartz_keyboard_capture()
         self.keyboard_backend = 'none'
+        self._strip_unreleased_modifiers()
+
+    def _strip_unreleased_modifiers(self):
+        """Drop dangling modifier keydowns with no matching keyup.
+
+        Happens when recording ends while modifiers are held (e.g. the
+        ⌃⌥⌘⎋ stop hotkey); replaying an unmatched modifier press would
+        leave the system modifier state stuck.
+        """
+        for kc in _MODIFIER_KEYCODES:
+            for i in range(len(self.events) - 1, -1, -1):
+                ev = self.events[i]
+                if ev.get('keycode') == kc and ev.get('type') in ('keydown', 'keyup'):
+                    if ev['type'] == 'keydown':
+                        del self.events[i]
+                    break
+
+    def _is_stop_hotkey_flags(self, flags):
+        """True if ctrl+alt+cmd are all held (fn/globe optional)."""
+        return (
+            bool(flags & keymap.MODIFIER_FLAGS['ctrl'])
+            and bool(flags & keymap.MODIFIER_FLAGS['alt'])
+            and bool(flags & keymap.MODIFIER_FLAGS['cmd'])
+        )
+
+    def _fire_stop_hotkey(self):
+        cb = self.on_stop_hotkey
+        if cb and self.is_recording:
+            # Fresh thread: stopping from inside a listener callback would
+            # deadlock (stop() joins the listener threads).
+            threading.Thread(target=cb, daemon=True).start()
 
     def _timestamp(self):
         return time.monotonic() - self.start_time
@@ -300,6 +341,9 @@ class EventRecorder:
             flags = int(CGEventGetFlags(event))
 
             if event_type == kCGEventKeyDown:
+                if keycode == _ESCAPE_KEYCODE and self._is_stop_hotkey_flags(flags):
+                    self._fire_stop_hotkey()
+                    return event
                 self._record_keyboard_event('keydown', keycode, flags)
             elif event_type == kCGEventKeyUp:
                 self._record_keyboard_event('keyup', keycode, flags)
@@ -373,6 +417,13 @@ class EventRecorder:
             return
 
         try:
+            if (key == keyboard.Key.esc
+                    and self._modifiers['ctrl']
+                    and self._modifiers['alt']
+                    and self._modifiers['cmd']):
+                self._fire_stop_hotkey()
+                return
+
             # Update modifier state
             self._update_modifier(key, True)
 

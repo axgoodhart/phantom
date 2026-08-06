@@ -31,10 +31,13 @@ class Api:
 
     def __init__(self):
         self.recorder = EventRecorder()
+        self.recorder.on_stop_hotkey = self._on_stop_hotkey
         self.environment = None
         self._window = None        # Set by app.py after window creation
         self._overlay_window = None  # Set by app.py for the overlay
         self._record_prompt_visible = False
+        self._chip_active = False
+        self._panel_saved_frame = None
         self._record_options = {
             'record_resolution': True,
             'record_windows': True,
@@ -140,6 +143,112 @@ class Api:
             'keyboard_backend': self.recorder.keyboard_backend,
         }
 
+    # --- Recording chip mode ---
+    #
+    # While recording, the control panel collapses into a small click-through
+    # chip pinned to the bottom-left corner. Because the chip cannot receive
+    # mouse events, recording is stopped with the ⌃⌥⌘⎋ hotkey (handled by
+    # the recorder). If the native transform fails, the panel stays full-size
+    # with its Stop button, protected by the exclusion zone.
+
+    _CHIP_WIDTH = 216
+    _CHIP_HEIGHT = 64
+    _CHIP_MARGIN = 24
+    _PANEL_MIN_SIZE = (280, 500)  # Matches create_window(min_size=...)
+
+    def _find_panel_window(self, app):
+        for ns_window in app.windows():
+            if ns_window.title() == 'Phantom':
+                return ns_window
+        return None
+
+    def _enter_chip_mode(self):
+        """Collapse the control panel into a click-through recording chip."""
+        if self._chip_active:
+            return
+        try:
+            from AppKit import NSApplication
+            from Foundation import NSMakeRect, NSMakeSize
+            from PyObjCTools.AppHelper import callAfter
+        except Exception:
+            return
+
+        def _apply():
+            try:
+                panel = self._find_panel_window(NSApplication.sharedApplication())
+                if panel is None:
+                    return
+                self._panel_saved_frame = panel.frame()
+                panel.setMinSize_(NSMakeSize(1, 1))
+                panel.setIgnoresMouseEvents_(True)
+                panel.setFrame_display_animate_(
+                    NSMakeRect(self._CHIP_MARGIN, self._CHIP_MARGIN,
+                               self._CHIP_WIDTH, self._CHIP_HEIGHT),
+                    True, True,
+                )
+                self._chip_active = True
+                # Nothing of Phantom's is clickable now, and clicks over the
+                # chip pass through to the app beneath — record everything.
+                self.recorder.clear_exclusion_zone()
+
+                def _notify_ui():
+                    if self._window:
+                        try:
+                            self._window.evaluate_js('enterChipMode()')
+                        except Exception:
+                            pass
+                threading.Thread(target=_notify_ui, daemon=True).start()
+            except Exception:
+                pass
+
+        callAfter(_apply)
+
+    def _exit_chip_mode(self):
+        """Restore the control panel from chip mode."""
+        if not self._chip_active:
+            return
+        self._chip_active = False
+        saved_frame = self._panel_saved_frame
+        self._panel_saved_frame = None
+        try:
+            from AppKit import NSApplication
+            from Foundation import NSMakeSize
+            from PyObjCTools.AppHelper import callAfter
+        except Exception:
+            return
+
+        def _apply():
+            try:
+                panel = self._find_panel_window(NSApplication.sharedApplication())
+                if panel is None:
+                    return
+                panel.setIgnoresMouseEvents_(False)
+                panel.setMinSize_(NSMakeSize(*self._PANEL_MIN_SIZE))
+                if saved_frame is not None:
+                    panel.setFrame_display_animate_(saved_frame, True, True)
+            except Exception:
+                pass
+
+        callAfter(_apply)
+        if self._window:
+            try:
+                self._window.evaluate_js('exitChipMode()')
+            except Exception:
+                pass
+
+    def _on_stop_hotkey(self):
+        """Recorder callback: ⌃⌥⌘⎋ pressed during recording."""
+        result = self.stop_recording()
+        if result.get('status') != 'stopped':
+            return
+        if self._window:
+            try:
+                self._window.evaluate_js(
+                    f'onRecordingStoppedByHotkey({json.dumps(result)})'
+                )
+            except Exception:
+                pass
+
     def _apply_panel_exclusion_zone(self):
         """Set the recorder's exclusion rect to the control panel's bounds."""
         try:
@@ -226,6 +335,9 @@ class Api:
             except Exception:
                 pass
 
+        # Collapse the panel into the click-through recording chip.
+        self._enter_chip_mode()
+
         return result
 
     def start_recording(self, record_resolution=True, record_windows=True):
@@ -244,6 +356,9 @@ class Api:
             except Exception:
                 pass
 
+        # Collapse the panel into the click-through recording chip.
+        self._enter_chip_mode()
+
         return result
 
     def stop_recording(self):
@@ -253,6 +368,7 @@ class Api:
 
         self.recorder.stop()
         self.recorder.clear_exclusion_zone()
+        self._exit_chip_mode()
 
         # Hide overlay cursor
         if self._overlay_window:
@@ -1060,10 +1176,18 @@ class Api:
         return {'status': 'cleared'}
 
     def quit_app(self):
-        """Stop all activity and close the application."""
+        """Stop all activity and close the application.
+
+        Window destruction happens on a separate thread after this bridge
+        call has returned: destroying the calling window synchronously from
+        the JS bridge deadlocks it (the window being torn down is the one
+        servicing the call). A watchdog guarantees the process exits even if
+        native teardown hangs.
+        """
         try:
             if self.recorder.is_recording:
                 self.recorder.stop()
+                self.recorder.clear_exclusion_zone()
         except Exception:
             pass
         self._preview_active = False
@@ -1073,12 +1197,21 @@ class Api:
         except Exception:
             pass
 
-        import webview
-        for window in list(webview.windows):
-            try:
-                window.destroy()
-            except Exception:
-                pass
+        def _force_exit():
+            time.sleep(2.0)
+            os._exit(0)
+
+        def _shutdown():
+            time.sleep(0.2)  # Let the bridge call return first
+            import webview
+            for window in list(webview.windows):
+                try:
+                    window.destroy()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_force_exit, daemon=True).start()
+        threading.Thread(target=_shutdown, daemon=True).start()
         return {'status': 'quitting'}
 
 
