@@ -116,7 +116,7 @@ def main():
 
     # Place the control panel near the bottom-left corner of the main display.
     panel_width = 320
-    panel_height = 700
+    panel_height = 600
     panel_margin = 24
     panel_x = max(0, min(panel_margin, screen_width - panel_width))
     panel_y = max(0, screen_height - panel_height - panel_margin)

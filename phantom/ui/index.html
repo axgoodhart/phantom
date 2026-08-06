@@ -17,10 +17,11 @@
       }
 
       :root {
-        --accent: #00ff88;
+        --accent: #10df58;
         --accent-rgb: 0, 255, 136;
-        --accent-muted: #44d98c;
+        --accent-muted: #0bab58;
         --accent-muted-rgb: 68, 217, 140;
+        --accent-dim: #017840;
       }
 
       body.mode-playback {
@@ -28,25 +29,23 @@
         --accent-rgb: 0, 229, 255;
         --accent-muted: #44c8e0;
         --accent-muted-rgb: 68, 200, 224;
+        --accent-dim: #05616c;
+
       }
 
       body {
         font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
         font-size: 13px;
         border-radius:10px;
-        border:4px solid var(--accent-muted);
+        border:3px solid var(--accent-muted);
         background: black;
         color: #e0e0e0;
         overflow-x: hidden;
         -webkit-user-select: none;
         user-select: none;
         -webkit-app-region: no-drag;
-        opacity: 0.3;
-        transition: opacity 0.25s ease;
-      }
-      body:hover {
         opacity: 1;
-        transition: opacity 0.15s ease;
+        transition: opacity 0.25s ease;
       }
 
       /* ---- Header ---- */
@@ -104,7 +103,6 @@
     -webkit-text-stroke: .5px lime;
     font-weight: 600;
     text-transform: uppercase;
-    margin-bottom: 4px;
 }
 
 @keyframes gradient {
@@ -146,12 +144,11 @@
       .mode-toggle {
         display: flex;
         background: #0a0a0a;
-        border-bottom: 1px solid #222;
       }
 
       .mode-tab {
         flex: 1;
-        padding: 9px 0;
+        padding: 4px 0;
         text-align: center;
         font-size: 11px;
         font-weight: 600;
@@ -169,13 +166,14 @@
         -webkit-app-region: no-drag;
       }
 
-      .mode-tab:hover:not(:disabled) {
-        color: #999;
+      .mode-tab:hover {
+        color: white;
       }
 
       .mode-tab.active {
         color: var(--accent);
         border-bottom-color: var(--accent);
+        text-shadow:0 0 3px var(--accent-dim);
       }
 
       .mode-tab:disabled {
@@ -247,9 +245,11 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 10px 16px;
-        background: rgba(var(--accent-muted-rgb), 0.04);
-        border-bottom: 1px solid #1a1a1a;
+        padding: 0px 9px;
+        background: black;
+        border-bottom: 1px solid var(--accent-dim);;
+      box-shadow: 0 10px 13px var(--accent-dim), inset 0 -3px 4px var(--accent-dim);;
+
       }
 
       .status-dot {
@@ -261,7 +261,8 @@
       }
 
       .status-dot.ready {
-        background: gray;
+        background: none;
+        border:1px solid var(--accent);
       }
       .status-dot.recording {
         background: #ff3344;
@@ -301,10 +302,10 @@
 
       /* ---- Sections ---- */
       .section {
-        padding: 12px 16px;
-        margin-bottom: 5%;
+        padding: 6px 8px;
+        padding-top:16px;
         border-top: 0.1px solid teal;
-        border-bottom: 1px solid #1a1a1a;
+        border-bottom: 1px solid var(--accent-dim);;
       }
 
       .section-title {
@@ -964,6 +965,35 @@
       .toast.visible {
         transform: translateX(-50%) translateY(0);
       }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.top-bar,
+.footer {
+  flex: 0 0 auto;
+}
+
+.record-panel,
+.playback-panel.visible {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#recording-top, #workflow-top {
+  padding-top: 44px;
+}
     </style>
   </head>
   <body>
@@ -971,7 +1001,6 @@
       <div class="header pywebview-drag-region">
         <button class="quit-btn" id="btnQuit" title="Quit Phantom">&#10005;</button>
         <h1>PHANTOM</h1>
-        <div class="subtitle">macOS Input Recording & Replay</div>
       </div>
 
       <!-- Mode Toggle -->
@@ -992,7 +1021,7 @@
     <!-- ====== Record Panel ====== -->
     <div id="recordPanel" class="record-panel">
       <!-- Recording Controls -->
-      <div class="section">
+      <div class="section" id="recording-top">
         <div class="section-title">Recording</div>
         <div class="btn-row">
           <button class="btn primary" id="btnRecord">Record</button>
@@ -1094,7 +1123,7 @@
 
     <!-- ====== Playback Panel ====== -->
     <div id="playbackPanel" class="playback-panel">
-      <div class="section">
+      <div class="section" id="workflow-top">
         <div class="section-title">Workflow File</div>
         <button class="btn primary" id="btnOpenWorkflow" style="width: 100%">
           Browse Workflows...
