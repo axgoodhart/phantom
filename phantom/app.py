@@ -135,7 +135,6 @@ def main():
         min_size=(280, 500),
         frameless=True,
         transparent=True,
-        opacity=0.6,
         easy_drag=False,
     )
     api.set_window(panel)
