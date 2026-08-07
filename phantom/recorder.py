@@ -54,8 +54,11 @@ class EventRecorder:
         self.start_time = 0
 
         # Called (on a fresh thread) when the stop hotkey ⌃⌥⌘⎋ is pressed
-        # during recording. The hotkey itself is never recorded.
+        # during recording or playback. The hotkey itself is never recorded.
         self.on_stop_hotkey = None
+        self._stop_hotkey_only = False
+        self._stop_hotkey_fired = False
+        self._stop_hotkey_lock = threading.Lock()
 
         # Thread-safe pending events for UI polling
         self._pending = []
@@ -66,6 +69,8 @@ class EventRecorder:
         self._keyboard_listener = None
         self._keyboard_thread = None
         self._keyboard_loop = None
+        self._keyboard_ready = threading.Event()
+        self._quartz_tap_ready = False
         self._keyboard_flags = 0
         self._modifier_key_state = {}
         self.keyboard_backend = 'none'
@@ -118,16 +123,7 @@ class EventRecorder:
             on_scroll=self._on_scroll,
         )
         self._mouse_listener.start()
-        # Prefer native Quartz tap on macOS; fallback to pynput keyboard listener.
-        if not self._start_quartz_keyboard_capture():
-            self._keyboard_listener = keyboard.Listener(
-                on_press=self._on_press,
-                on_release=self._on_release,
-            )
-            self._keyboard_listener.start()
-            self.keyboard_backend = 'pynput'
-        else:
-            self.keyboard_backend = 'quartz'
+        self._start_keyboard_capture()
 
     def stop(self):
         """Stop recording events."""
@@ -141,6 +137,46 @@ class EventRecorder:
         self._stop_quartz_keyboard_capture()
         self.keyboard_backend = 'none'
         self._strip_unreleased_modifiers()
+
+    def _keyboard_capture_active(self):
+        """True while keyboard input is needed for recording or force-stop."""
+        return self.is_recording or self._stop_hotkey_only
+
+    def _start_keyboard_capture(self):
+        """Start the reliable native listener, with pynput as fallback."""
+        with self._stop_hotkey_lock:
+            self._stop_hotkey_fired = False
+        self._modifiers = {k: False for k in self._modifiers}
+
+        if self._start_quartz_keyboard_capture():
+            self.keyboard_backend = 'quartz'
+            return True
+
+        self._keyboard_listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+        )
+        self._keyboard_listener.start()
+        self.keyboard_backend = 'pynput'
+        return True
+
+    def start_stop_hotkey_monitor(self):
+        """Listen only for force-stop while a workflow is playing."""
+        if self.is_recording or self._stop_hotkey_only:
+            return True
+        self._stop_hotkey_only = True
+        return self._start_keyboard_capture()
+
+    def stop_stop_hotkey_monitor(self):
+        """Stop the playback-only force-stop listener."""
+        if not self._stop_hotkey_only:
+            return
+        self._stop_hotkey_only = False
+        if self._keyboard_listener:
+            self._keyboard_listener.stop()
+            self._keyboard_listener = None
+        self._stop_quartz_keyboard_capture()
+        self.keyboard_backend = 'none'
 
     def _strip_unreleased_modifiers(self):
         """Drop dangling modifier keydowns with no matching keyup.
@@ -167,10 +203,15 @@ class EventRecorder:
 
     def _fire_stop_hotkey(self):
         cb = self.on_stop_hotkey
-        if cb and self.is_recording:
-            # Fresh thread: stopping from inside a listener callback would
-            # deadlock (stop() joins the listener threads).
-            threading.Thread(target=cb, daemon=True).start()
+        if not cb or not self._keyboard_capture_active():
+            return
+        with self._stop_hotkey_lock:
+            if self._stop_hotkey_fired:
+                return
+            self._stop_hotkey_fired = True
+        # Fresh thread: stopping from inside a listener callback would
+        # deadlock (stop() joins the listener threads).
+        threading.Thread(target=cb, daemon=True).start()
 
     def _timestamp(self):
         return time.monotonic() - self.start_time
@@ -278,15 +319,16 @@ class EventRecorder:
 
         self._keyboard_flags = 0
         self._modifier_key_state = {}
+        self._quartz_tap_ready = False
+        self._keyboard_ready.clear()
         self._keyboard_thread = threading.Thread(
             target=self._run_quartz_keyboard_loop,
             daemon=True,
         )
         self._keyboard_thread.start()
-
-        # Give the tap thread a brief moment to initialize.
-        time.sleep(0.05)
-        return self._keyboard_thread.is_alive()
+        # Do not claim Quartz is active until the event tap actually exists.
+        self._keyboard_ready.wait(timeout=0.5)
+        return self._quartz_tap_ready and self._keyboard_thread.is_alive()
 
     def _stop_quartz_keyboard_capture(self):
         """Stop the Quartz keyboard tap loop."""
@@ -317,16 +359,19 @@ class EventRecorder:
             None,
         )
         if tap is None:
+            self._keyboard_ready.set()
             return
 
         loop_source = CFMachPortCreateRunLoopSource(None, tap, 0)
         self._keyboard_loop = CFRunLoopGetCurrent()
         CFRunLoopAddSource(self._keyboard_loop, loop_source, kCFRunLoopDefaultMode)
         CGEventTapEnable(tap, True)
+        self._quartz_tap_ready = True
+        self._keyboard_ready.set()
 
-        while self.is_recording:
+        while self._keyboard_capture_active():
             result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, False)
-            if result != kCFRunLoopRunTimedOut and not self.is_recording:
+            if result != kCFRunLoopRunTimedOut and not self._keyboard_capture_active():
                 break
 
         self._keyboard_loop = None
@@ -334,7 +379,7 @@ class EventRecorder:
     def _quartz_keyboard_callback(self, _proxy, event_type, event, _refcon):
         """Low-level Quartz keyboard callback."""
         try:
-            if not self.is_recording:
+            if not self._keyboard_capture_active():
                 return event
 
             keycode = int(CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode))
@@ -344,10 +389,16 @@ class EventRecorder:
                 if keycode == _ESCAPE_KEYCODE and self._is_stop_hotkey_flags(flags):
                     self._fire_stop_hotkey()
                     return event
+                if not self.is_recording:
+                    return event
                 self._record_keyboard_event('keydown', keycode, flags)
             elif event_type == kCGEventKeyUp:
+                if not self.is_recording:
+                    return event
                 self._record_keyboard_event('keyup', keycode, flags)
             elif event_type == kCGEventFlagsChanged:
+                if not self.is_recording:
+                    return event
                 self._handle_flags_changed(keycode, flags)
         except Exception:
             # Never let keyboard callback exceptions break capture.
@@ -413,7 +464,7 @@ class EventRecorder:
         self._keyboard_flags = flags
 
     def _on_press(self, key):
-        if not self.is_recording:
+        if not self._keyboard_capture_active():
             return
 
         try:
@@ -426,6 +477,9 @@ class EventRecorder:
 
             # Update modifier state
             self._update_modifier(key, True)
+
+            if not self.is_recording:
+                return
 
             kc = keymap.get_keycode(key)
             display = keymap.key_display_name(key)
@@ -445,10 +499,14 @@ class EventRecorder:
             pass
 
     def _on_release(self, key):
-        if not self.is_recording:
+        if not self._keyboard_capture_active():
             return
 
         try:
+            if not self.is_recording:
+                self._update_modifier(key, False)
+                return
+
             kc = keymap.get_keycode(key)
             display = keymap.key_display_name(key)
             if kc is None and display:

@@ -56,6 +56,7 @@ class Api:
         self._playback_filepath = None
         self._playback_temp_filepath = None
         self._playback_play_sound = False
+        self._playback_cancelled = False
 
         # Loop state
         self._loop_count = 1        # Total iterations (0 = infinite)
@@ -145,11 +146,10 @@ class Api:
 
     # --- Recording chip mode ---
     #
-    # While recording, the control panel collapses into a small click-through
-    # chip pinned to the bottom-left corner. Because the chip cannot receive
-    # mouse events, recording is stopped with the ⌃⌥⌘⎋ hotkey (handled by
-    # the recorder). If the native transform fails, the panel stays full-size
-    # with its Stop button, protected by the exclusion zone.
+    # While recording, the control panel collapses into a small stop chip
+    # pinned to the bottom-left corner. The chip and the ⌃⌥⌘⎋ hotkey both
+    # stop recording. If the native transform fails, the panel stays full-size
+    # with its regular Stop button, protected by the exclusion zone.
 
     _CHIP_WIDTH = 216
     _CHIP_HEIGHT = 64
@@ -163,11 +163,11 @@ class Api:
         return None
 
     def _enter_chip_mode(self):
-        """Collapse the control panel into a click-through recording chip."""
+        """Collapse the control panel into a clickable recording stop chip."""
         if self._chip_active:
             return
         try:
-            from AppKit import NSApplication
+            from AppKit import NSApplication, NSScreen
             from Foundation import NSMakeRect, NSMakeSize
             from PyObjCTools.AppHelper import callAfter
         except Exception:
@@ -180,16 +180,23 @@ class Api:
                     return
                 self._panel_saved_frame = panel.frame()
                 panel.setMinSize_(NSMakeSize(1, 1))
-                panel.setIgnoresMouseEvents_(True)
+                panel.setIgnoresMouseEvents_(False)
                 panel.setFrame_display_animate_(
                     NSMakeRect(self._CHIP_MARGIN, self._CHIP_MARGIN,
                                self._CHIP_WIDTH, self._CHIP_HEIGHT),
                     True, True,
                 )
                 self._chip_active = True
-                # Nothing of Phantom's is clickable now, and clicks over the
-                # chip pass through to the app beneath — record everything.
-                self.recorder.clear_exclusion_zone()
+                # Keep the stop click out of the captured workflow. AppKit uses
+                # bottom-left coordinates; pynput uses top-left coordinates.
+                screen_height = float(NSScreen.mainScreen().frame().size.height)
+                chip_y = int(screen_height - self._CHIP_MARGIN - self._CHIP_HEIGHT)
+                self.recorder.set_exclusion_zone(
+                    self._CHIP_MARGIN,
+                    chip_y,
+                    self._CHIP_WIDTH,
+                    self._CHIP_HEIGHT,
+                )
 
                 def _notify_ui():
                     if self._window:
@@ -237,17 +244,29 @@ class Api:
                 pass
 
     def _on_stop_hotkey(self):
-        """Recorder callback: ⌃⌥⌘⎋ pressed during recording."""
-        result = self.stop_recording()
-        if result.get('status') != 'stopped':
+        """Recorder callback: ⌃⌥⌘⎋ pressed during recording or playback."""
+        if self.recorder.is_recording:
+            result = self.stop_recording()
+            if result.get('status') != 'stopped':
+                return
+            if self._window:
+                try:
+                    self._window.evaluate_js(
+                        f'onRecordingStoppedByHotkey({json.dumps(result)})'
+                    )
+                except Exception:
+                    pass
             return
-        if self._window:
-            try:
-                self._window.evaluate_js(
-                    f'onRecordingStoppedByHotkey({json.dumps(result)})'
-                )
-            except Exception:
-                pass
+
+        if self._playback_active:
+            result = self.stop_workflow()
+            if result.get('status') != 'stopped':
+                return
+            if self._window:
+                try:
+                    self._window.evaluate_js('onPlaybackStoppedByHotkey()')
+                except Exception:
+                    pass
 
     def _apply_panel_exclusion_zone(self):
         """Set the recorder's exclusion rect to the control panel's bounds."""
@@ -925,6 +944,8 @@ class Api:
 
             self._playback_process = proc
             self._playback_active = True
+            self._playback_cancelled = False
+            self.recorder.start_stop_hotkey_monitor()
             self._playback_thread = threading.Thread(
                 target=self._monitor_playback,
                 daemon=True,
@@ -945,6 +966,7 @@ class Api:
 
         self._playback_play_sound = False
         self._playback_active = False  # Signal loop to stop
+        self._playback_cancelled = True
 
         proc = self._playback_process
         try:
@@ -958,6 +980,7 @@ class Api:
             pass
 
         self._loop_cmd = None
+        self.recorder.stop_stop_hotkey_monitor()
         self._cleanup_playback_temp_file()
         return {'status': 'stopped'}
 
@@ -1097,8 +1120,10 @@ class Api:
                 break
 
         # All done
+        cancelled = self._playback_cancelled
         self._playback_active = False
         self._playback_process = None
+        self.recorder.stop_stop_hotkey_monitor()
         self._cleanup_playback_temp_file()
         play_sound = self._playback_play_sound
         self._playback_play_sound = False
@@ -1112,7 +1137,7 @@ class Api:
                     self._window.evaluate_js(
                         f'onPlaybackError({json.dumps(error_message)})'
                     )
-                else:
+                elif not cancelled:
                     self._window.evaluate_js('onPlaybackComplete()')
             except Exception:
                 pass
@@ -1194,6 +1219,8 @@ class Api:
         try:
             if self._playback_active:
                 self.stop_workflow()
+            else:
+                self.recorder.stop_stop_hotkey_monitor()
         except Exception:
             pass
 
