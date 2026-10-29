@@ -1,3 +1,21 @@
+# Phantom
+
+macOS input recorder and replayer. Perform a task once; Phantom replays it as
+real input events that the target application cannot distinguish from your hands.
+
+**The app is now native Swift — see [`swift/README.md`](swift/README.md).**
+Workflows recorded by the Python build are read directly by the Swift app, so
+nothing in `~/Library/Application Support/Phantom/workflows` needs migrating.
+
+```bash
+cd swift && ./Scripts/build_app.sh && open build/Phantom.app
+```
+
+The rest of this file covers the original Python build, kept for reference
+while the rewrite settles.
+
+---
+
 # Build Notes (pyenv + py2app)
 
 ## Python version

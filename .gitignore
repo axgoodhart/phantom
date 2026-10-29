@@ -10,3 +10,7 @@ dist/
 .gstack/
 firebase-debug.log
 *.rtf
+
+swift/.build/
+swift/build/
+.swiftpm/
