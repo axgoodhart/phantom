@@ -10,3 +10,5 @@ dist/
 .gstack/
 firebase-debug.log
 *.rtf
+
+.history/
